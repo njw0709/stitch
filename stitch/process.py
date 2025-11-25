@@ -214,6 +214,26 @@ def process_multiple_lags_batch(
     contextual_geoid_col = first_context.geoid_col
     contextual_data_col = first_context.data_col
 
+    # Check for duplicate date and geoid pairs
+    duplicate_mask = contextual_df.duplicated(
+        subset=[contextual_date_col, contextual_geoid_col], keep=False
+    )
+    n_duplicates = duplicate_mask.sum()
+    if n_duplicates > 0:
+        print(
+            f"⚠️  Warning: Found {n_duplicates} duplicate date-geoid pairs in contextual data"
+        )
+        # Show a few examples
+        duplicate_examples = contextual_df[duplicate_mask].head(5)[
+            [contextual_date_col, contextual_geoid_col]
+        ]
+        print(f"  Example duplicates:\n{duplicate_examples}")
+        # Remove duplicates, keeping the first occurrence
+        contextual_df = contextual_df.drop_duplicates(
+            subset=[contextual_date_col, contextual_geoid_col], keep="first"
+        )
+        print(f"  Removed duplicates. New shape: {contextual_df.shape}")
+
     # Step 4: Process each lag using pre-computed data
     temp_files = []
     for n in tqdm(n_days, desc="Processing lags", unit="lag"):
@@ -351,6 +371,26 @@ def process_multiple_lags_parallel(
     contextual_date_col = first_context.date_col
     contextual_geoid_col = first_context.geoid_col
     contextual_data_col = first_context.data_col
+
+    # Check for duplicate date and geoid pairs
+    duplicate_mask = contextual_df.duplicated(
+        subset=[contextual_date_col, contextual_geoid_col], keep=False
+    )
+    n_duplicates = duplicate_mask.sum()
+    if n_duplicates > 0:
+        print(
+            f"⚠️  Warning: Found {n_duplicates} duplicate date-geoid pairs in contextual data"
+        )
+        # Show a few examples
+        duplicate_examples = contextual_df[duplicate_mask].head(5)[
+            [contextual_date_col, contextual_geoid_col]
+        ]
+        print(f"  Example duplicates:\n{duplicate_examples}")
+        # Remove duplicates, keeping the first occurrence
+        contextual_df = contextual_df.drop_duplicates(
+            subset=[contextual_date_col, contextual_geoid_col], keep="first"
+        )
+        print(f"  Removed duplicates. New shape: {contextual_df.shape}")
 
     # Auto-calculate max_workers based on available memory if not specified
     if max_workers is None and auto_memory_limit:
