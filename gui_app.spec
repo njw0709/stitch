@@ -9,7 +9,7 @@ PyQt6-based GUI application.
 import sys
 import os
 import shutil
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 from PyQt6 import QtCore
 
 block_cipher = None
@@ -31,6 +31,13 @@ hidden_imports = [
     'PyQt6.QtCore',
     'PyQt6.QtGui',
     'PyQt6.QtWidgets',
+    # importlib.metadata dependencies (required for version checking)
+    'importlib.metadata',
+    'importlib_metadata',
+    'jaraco',
+    'jaraco.text',
+    'jaraco.functools',
+    'jaraco.context',
 ] + stitch_submodules
 
 # Collect Qt plugins - required for all platforms
@@ -52,6 +59,18 @@ datas = [
     (os.path.join(qt_plugins_path, 'platforms'), 'PyQt6/Qt6/plugins/platforms'),
     (os.path.join(qt_plugins_path, 'styles'), 'PyQt6/Qt6/plugins/styles'),
 ]
+
+# Collect metadata for packages used by importlib.metadata
+# This is required for version checking and other metadata operations
+try:
+    datas += copy_metadata('importlib_metadata')
+except Exception:
+    pass  # Package might not be installed
+
+try:
+    datas += copy_metadata('stitch')
+except Exception:
+    pass  # Package might not be installed
 
 # Function to filter out problematic Qt plugins on macOS
 def filter_binaries(binaries):
@@ -89,7 +108,7 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=hidden_imports,
-    hookspath=[],
+    hookspath=['scripts'],
     hooksconfig={},
     runtime_hooks=['scripts/hook-PyQt6.py'],
     excludes=[
