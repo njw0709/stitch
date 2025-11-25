@@ -729,10 +729,12 @@ def run_pipeline(args: argparse.Namespace):
         )
 
     print(f"Finished processing {len(temp_files)} lag files")
+    # clean up
+    del contextual_data_all
 
     # Merge all lag outputs
     print(f"Merging {len(temp_files)} lag outputs with main HRS data...")
-    final_df = hrs_epi_data.df.copy()
+    final_df = hrs_epi_data.df
 
     # Filter files to current measure type (prefix) to avoid leftovers, then sort by lag
     temp_files = [
@@ -740,11 +742,31 @@ def run_pipeline(args: argparse.Namespace):
     ]
     temp_files.sort(key=lambda f: int(f.stem.split("_lag_")[1]))
 
+    # Collect all “lag” columns to concatenate at once
+    lag_cols = []
+
     for i, f in enumerate(temp_files):
         if (i + 1) % 100 == 0:
-            print(f"  Merged {i + 1}/{len(temp_files)} files...")
+            print(f"  Processed {i + 1}/{len(temp_files)} files...")
+
         lag_df = pd.read_parquet(f)
-        final_df = final_df.merge(lag_df, on=args.id_col, how="left")
+
+        # Optional safety check (recommended)
+        # Ensures row order is truly aligned
+        if not (final_df[args.id_col].values == lag_df[args.id_col].values).all():
+            raise ValueError(f"Row order mismatch in file {f}")
+
+        # Drop the id_col from the lag dataframe; we already have it in final_df
+        lag_df = lag_df.drop(columns=[args.id_col], errors="ignore")
+
+        lag_cols.append(lag_df)
+
+    # Now concatenate all collected columns at once horizontally
+    final_df = pd.concat(
+        [final_df.reset_index(drop=True)]
+        + [df.reset_index(drop=True) for df in lag_cols],
+        axis=1,
+    )
 
     # Convert GEOID columns to strings before saving
     base_geoid = args.geoid_col
