@@ -193,6 +193,8 @@ class DailyMeasureData:
                 )
 
             self.df = df
+            # Check for duplicate date-geoid pairs
+            self._check_unique_date_geoid_pairs()
 
         # For CSV files, use optimized reading logic
         else:
@@ -260,6 +262,8 @@ class DailyMeasureData:
                 )
 
                 self.df = df
+                # Check for duplicate date-geoid pairs
+                self._check_unique_date_geoid_pairs()
             else:
                 # Original full-load path for wide format or no filtering
                 # Try pyarrow engine for speed, fall back to default
@@ -311,6 +315,9 @@ class DailyMeasureData:
 
                 self.df = df
 
+        # --- 6. Check for duplicate date-geoid pairs ---
+        self._check_unique_date_geoid_pairs()
+
     # ------------------------------------------------------------------
     # Helper methods
     # ------------------------------------------------------------------
@@ -341,6 +348,46 @@ class DailyMeasureData:
             header = df.iloc[:0]
 
         return self._apply_rename(header)
+
+    def _check_unique_date_geoid_pairs(self) -> None:
+        """
+        Verify that (date, GEOID) pairs are unique in the loaded data.
+
+        Raises
+        ------
+        ValueError
+            If duplicate (date, GEOID) pairs are found, with details about
+            the first 10 duplicates.
+        """
+        if self.df.empty:
+            return
+
+        # Check for duplicates on the combination of date and geoid columns
+        duplicates = self.df[
+            self.df.duplicated(subset=[self.date_col, self.geoid_col], keep=False)
+        ]
+
+        if not duplicates.empty:
+            n_duplicates = len(duplicates)
+            # Get unique duplicate pairs for reporting
+            duplicate_pairs = duplicates[
+                [self.date_col, self.geoid_col]
+            ].drop_duplicates()
+            n_unique_pairs = len(duplicate_pairs)
+
+            # Show first 10 duplicate pairs as examples
+            sample_duplicates = duplicate_pairs.head(10)
+            sample_str = "\n".join(
+                f"  - Date: {row[self.date_col]}, GEOID: {row[self.geoid_col]}"
+                for _, row in sample_duplicates.iterrows()
+            )
+
+            raise ValueError(
+                f"Found {n_duplicates:,} duplicate rows for {n_unique_pairs:,} unique "
+                f"(date, GEOID) pairs in file: {self.filepath.name}\n"
+                f"Each (date, GEOID) combination should appear exactly once.\n"
+                f"First {min(10, n_unique_pairs)} duplicate pairs:\n{sample_str}"
+            )
 
     def __repr__(self):
         return f"DailyMeasureData({self.filepath.name}, col={self.data_col}, format={self.format}, rows={len(self.df)})"

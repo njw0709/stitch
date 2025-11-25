@@ -751,10 +751,39 @@ def run_pipeline(args: argparse.Namespace):
 
         lag_df = pd.read_parquet(f)
 
-        # Optional safety check (recommended)
-        # Ensures row order is truly aligned
-        if not (final_df[args.id_col].values == lag_df[args.id_col].values).all():
-            raise ValueError(f"Row order mismatch in file {f}")
+        # --- Safety checks ---
+        # 1. Matching number of rows
+        if len(lag_df) != len(final_df):
+            raise ValueError(
+                f"Row count mismatch in lag file {f}: "
+                f"{len(lag_df)} rows vs {len(final_df)} in main df"
+            )
+
+        # 2. Same IDs AND same order
+        ids_left = final_df[args.id_col].values
+        ids_right = lag_df[args.id_col].values
+
+        if not (ids_left == ids_right).all():
+            # To disambiguate, tell the user whether it's order mismatch or ID mismatch
+            if set(ids_left) != set(ids_right):
+                raise ValueError(
+                    f"ID set mismatch in lag file {f}: "
+                    "the lag file has different IDs than the main df"
+                )
+            else:
+                raise ValueError(
+                    f"ID order mismatch in lag file {f}: "
+                    "IDs match as a set but not row order"
+                )
+
+        # 3. No duplicate IDs in lag_df
+        if lag_df[args.id_col].duplicated().any():
+            dupes = lag_df[args.id_col][lag_df[args.id_col].duplicated()].unique()[:5]
+            raise ValueError(
+                f"Lag file {f} contains duplicate IDs (example: {dupes}). "
+                "This will cause row duplication if merged."
+            )
+        # --- End safety checks ---
 
         # Drop the id_col from the lag dataframe; we already have it in final_df
         lag_df = lag_df.drop(columns=[args.id_col], errors="ignore")
