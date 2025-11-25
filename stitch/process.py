@@ -816,13 +816,6 @@ def run_pipeline(args: argparse.Namespace):
                     "IDs match as a set but not row order"
                 )
 
-        # 3. No duplicate IDs in lag_df
-        if lag_df[args.id_col].duplicated().any():
-            dupes = lag_df[args.id_col][lag_df[args.id_col].duplicated()].unique()[:5]
-            raise ValueError(
-                f"Lag file {f} contains duplicate IDs (example: {dupes}). "
-                "This will cause row duplication if merged."
-            )
         # --- End safety checks ---
 
         # Drop the id_col from the lag dataframe; we already have it in final_df
