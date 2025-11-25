@@ -31,13 +31,18 @@ hidden_imports = [
     'PyQt6.QtCore',
     'PyQt6.QtGui',
     'PyQt6.QtWidgets',
-    # importlib.metadata dependencies (required for version checking)
+    # importlib.metadata and pkg_resources dependencies (required for version checking)
     'importlib.metadata',
     'importlib_metadata',
+    'pkg_resources',
+    'setuptools',
+    # jaraco namespace package and its dependencies
     'jaraco',
     'jaraco.text',
     'jaraco.functools',
     'jaraco.context',
+    'more_itertools',
+    'autocommand',
 ] + stitch_submodules
 
 # Collect Qt plugins - required for all platforms
@@ -55,22 +60,22 @@ if sys.platform == 'darwin':
             print(f"Removing problematic Qt plugin directory: {plugin_dir}")
             shutil.rmtree(plugin_dir, ignore_errors=True)
 
-datas = [
-    (os.path.join(qt_plugins_path, 'platforms'), 'PyQt6/Qt6/plugins/platforms'),
-    (os.path.join(qt_plugins_path, 'styles'), 'PyQt6/Qt6/plugins/styles'),
-]
+datas = []
+
+# Add Qt plugins that exist (some may not be present on all platforms)
+qt_plugin_dirs = ['platforms', 'styles', 'platformthemes', 'iconengines', 'imageformats']
+for plugin_dir in qt_plugin_dirs:
+    plugin_path = os.path.join(qt_plugins_path, plugin_dir)
+    if os.path.exists(plugin_path):
+        datas.append((plugin_path, f'PyQt6/Qt6/plugins/{plugin_dir}'))
 
 # Collect metadata for packages used by importlib.metadata
 # This is required for version checking and other metadata operations
-try:
-    datas += copy_metadata('importlib_metadata')
-except Exception:
-    pass  # Package might not be installed
-
-try:
-    datas += copy_metadata('stitch')
-except Exception:
-    pass  # Package might not be installed
+for pkg in ['importlib_metadata', 'stitch', 'jaraco.text', 'jaraco.functools', 'jaraco.context', 'more-itertools']:
+    try:
+        datas += copy_metadata(pkg)
+    except Exception:
+        pass  # Package might not be installed
 
 # Function to filter out problematic Qt plugins on macOS
 def filter_binaries(binaries):
