@@ -70,7 +70,7 @@ See [stitch/gui/README.md](stitch/gui/README.md) for detailed GUI documentation.
 For automation and scripting:
 
 ```bash
-python link_lags.py \
+python stitch_cli.py \
     --hrs-data "path/to/HRSprep2016full.dta" \
     --context-dir "path/to/daily_heat_long" \
     --output_name "HRSHeatLinked.dta" \
@@ -88,7 +88,7 @@ python link_lags.py \
 #### With Residential History
 
 ```bash
-python link_lags.py \
+python stitch_cli.py \
     --hrs-data "path/to/HRSprep2016full.dta" \
     --residential-hist "path/to/residential_history.dta" \
     --res-hist-hhidpn hhidpn \
@@ -160,7 +160,7 @@ stitch/
 │       ├── validators.py      # Data validation
 │       ├── pages/             # Wizard pages
 │       └── widgets/           # Reusable UI components
-├── link_lags.py               # CLI entry point
+├── stitch_cli.py               # CLI entry point
 ├── gui_app.py                 # GUI entry point
 └── tests/                     # Test suite
 ```
@@ -184,7 +184,7 @@ Handles temporal/geographic alignment between HRS and contextual data, including
 ### Example 1: Heat Index Linkage (365 days)
 
 ```bash
-python link_lags.py \
+python stitch_cli.py \
     --hrs-data "data/HRS2016.dta" \
     --context-dir "data/heat_index" \
     --measure-type heat_index \
@@ -201,7 +201,7 @@ python link_lags.py \
 ### Example 2: PM2.5 with Residential History
 
 ```bash
-python link_lags.py \
+python stitch_cli.py \
     --hrs-data "data/HRS2016.dta" \
     --residential-hist "data/residential_moves.dta" \
     --context-dir "data/pm25" \
