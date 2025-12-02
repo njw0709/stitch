@@ -113,7 +113,7 @@ Using the time and location information from the first two data sources, STITCH 
 ## Summary of the processing pipeline
 ![Overview of STITCH processing pipeline. STITCH efficiently merges primary dataset with contextual data based on time and location information derived from both the primary dataset and the residential history dataset.](figures/pipeline_overview.pdf){#fig:pipeline}
 
-Using the data sources described above, STITCH links contextual data to the primary dataset based on time and location information. Figure \autoref{fig:pipeline} provides an overview of the STITCH processing pipeline.
+Using the data sources described above, STITCH links contextual data to the primary dataset based on time and location information. \autoref{fig:pipeline} provides an overview of the STITCH processing pipeline.
 
 STITCH first loads the primary dataset—and, if provided, the residential history dataset—into memory. Because contextual datasets are often too large to load in full, STITCH computes all required locations and time points from the loaded datasets and then reads only the necessary portions of the contextual data. This creates a filtered subset containing only the rows relevant for linkage.
 
@@ -138,22 +138,22 @@ Below are the configuration pages for STITCH-GUI, along with a brief description
 
 1. **Base (survey/interview) dataset selection** 
 
-![Base (survey/interview) dataset selection and configuration page.](figures/gui_screen_1.png){ width=50% }
+![Base (survey/interview) dataset selection and configuration page.](figures/gui_screen_1.png){ #fig:gui_1 width=50% }
 
-Here, user begins by browsing and selecting the base (survey/interview) dataset file. The file must be in a supported format (e.g., .dta, .csv, .parquet, .feather, .xlsx, .xls). STITCH-GUI then reads in the column information of the selected dataset to provide options for the dropdown menus below. User must specify: (1) date, or reference time column, (2) participant ID column, and (3) location identifier column. Location identifier column will be overridden if residential history dataset is provided in the next screen.
+Here, user begins by browsing and selecting the base (survey/interview) dataset file (\autoref{fig:gui_1}). The file must be in a supported format (e.g., .dta, .csv, .parquet, .feather, .xlsx, .xls). STITCH-GUI then reads in the column information of the selected dataset to provide options for the dropdown menus below. User must specify: (1) date, or reference time column, (2) participant ID column, and (3) location identifier column. Location identifier column will be overridden if residential history dataset is provided in the next screen.
 
 2. **Residential history dataset selection (Optional)** 
 
-![Residential History Dataset Selection (Optional)](figures/gui_screen_2.png){ width=50% }
+![Residential history dataset selection and configuration page. (Optional)](figures/gui_screen_2.png){ #fig:gui_2 width=50% }
 
-If the user has a dataset containing residential history information, they can select it here. The dataset must be in a supported format (e.g., .dta, .csv, .parquet, .feather, .xlsx, .xls). STITCH-GUI then reads in the selected dataset to provide options for the dropdown menus below. User must specify: (1) participant ID column, (2) moved indicator column, (3) year column, and (4) month column. If month information is missing, STITCH assumes the move (or study entry) occurred in January of that year.
+If the user has a dataset containing residential history information, they can select it here (\autoref{fig:gui_2}). The dataset must be in a supported format (e.g., .dta, .csv, .parquet, .feather, .xlsx, .xls). STITCH-GUI then reads in the selected dataset to provide options for the dropdown menus below. User must specify: (1) participant ID column, (2) moved indicator column, (3) year column, and (4) month column. If month information is missing, STITCH assumes the move (or study entry) occurred in January of that year.
 
 
 3. **Contextual data directory selection** 
 
-![Contextual data directory selection](figures/gui_screen_3.png){ width=50% }
+![Contextual data directory selection page](figures/gui_screen_3.png){ #fig:gui_3 width=50% }
 
-User must specify the directory where contextual data are stored in the local environment. These data must be organized in yearly files that follow a consistent naming scheme. If the directory contains multiple files, user must specify the file name filter to select the relevant files. For example, if a directory contains files like "heat_2010.csv", "heat_2011.csv", etc., as well as "pm25_2010.csv", "pm25_2011.csv", etc., user can use "heat" as file name filter to only select the heat files. STITCH uses the file name to determine the year of the contextual data. Therefore, the file name must contain a 4-digit year. If the file name does not contain a 4-digit year, STITCH will not be able to determine the year of the contextual data. 
+User must specify the directory where contextual data are stored in the local environment (\autoref{fig:gui_3}). These data must be organized in yearly files that follow a consistent naming scheme. If the directory contains multiple files, user must specify the file name filter to select the relevant files. For example, if a directory contains files like "heat_2010.csv", "heat_2011.csv", etc., as well as "pm25_2010.csv", "pm25_2011.csv", etc., user can use "heat" as file name filter to only select the heat files. STITCH uses the file name to determine the year of the contextual data. Therefore, the file name must contain a 4-digit year. If the file name does not contain a 4-digit year, STITCH will not be able to determine the year of the contextual data. 
 
 Once a directory and file name filter are specified, STITCH-GUI displays a preview of one of the files in the directory. User can then select the columns to be used as (1) temporal information (e.g., date), (2) location identifier (e.g., census tract FIPS code).
 
@@ -161,9 +161,9 @@ A file can contain multiple columns of contextual data (e.g. raw temperature, he
 
 4. **Pipeline configuration**
 
-![Pipeline configuration](figures/gui_screen_4.png){ width=50% }
+![Pipeline configuration page](figures/gui_screen_4.png){ #fig:gui_4 width=50% }
 
-Once all data sources are selected and configured, user specifies the number of lags to compute. Currently, only daily lags are supported (i.e., 0-day prior, 1-day prior, 2-day prior, etc.). User can also choose to include the computed lag date columns and location columns in the final merged dataset. If the option is not selected, the computed lag date columns and location columns will be dropped and not appear in the final merged dataset.
+Once all data sources are selected and configured, user specifies the number of lags to compute (\autoref{fig:gui_4}). Currently, only daily lags are supported (i.e., 0-day prior, 1-day prior, 2-day prior, etc.). User can also choose to include the computed lag date columns and location columns in the final merged dataset. If the option is not selected, the computed lag date columns and location columns will be dropped and not appear in the final merged dataset.
 
 For merges with many lags (e.g., 365 days), STITCH allows user to process merges in parallel. While this makes processing faster, it also requires more memory. STITCH automatically computes the maximum number of workers to use based on the available memory.
 
@@ -171,9 +171,9 @@ Finally, user must specify the output directory and filename. STITCH saves both 
 
 5. **Execution**
 
-![Execution](figures/gui_screen_5.png){ width=50% }
+![Execution page](figures/gui_screen_5.png){ #fig:gui_5 width=50% }
 
-Once all configuration is complete, user can click the "Run Pipeline" button to start the merging process. STITCH-GUI displays a real-time log window to monitor the progress of the merging process.
+Once all configuration is complete, user can click the "Run Pipeline" button to start the merging process (\autoref{fig:gui_5}). STITCH-GUI displays a real-time log window to monitor the progress of the merging process.
 
 STITCH can also be run from the command line using the `stitch-cli.py` script. The script takes the same arguments as the GUI, but without the graphical interface. This allows users to configure and run the pipeline programmatically, which can be useful when running STITCH to merge multiple datasets in a batch.
 
