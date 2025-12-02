@@ -24,9 +24,10 @@ authors:
 affiliations:
  - name: Neuroscience Graduate Program, University of Southern California, United States
    index: 1
-   ror: 00hx57361
+   ror: 03taz7m60 
  - name: Leonard Davis School of Gerontology, University of Southern California, United States
    index: 2
+   ror: 03taz7m60
 date: 30 October 2025
 bibliography: paper.bib
 ---
