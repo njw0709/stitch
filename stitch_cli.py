@@ -91,7 +91,7 @@ def _create_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--data-col",
-        help="Explicit data column name to use (optional, overrides measure type)",
+        help="Explicit data column name to use.",
     )
     parser.add_argument(
         "--geoid-col",
