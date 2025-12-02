@@ -28,12 +28,12 @@ affiliations:
  - name: Leonard Davis School of Gerontology, University of Southern California, United States
    index: 2
 date: 30 October 2025
-bibliography: paper/paper.bib
+bibliography: paper.bib
 ---
 
 # Summary
 
-STITCH is a Python-based framework for linking diverse data sources across geospatial and temporal dimensions, enabling the enrichment of individual-level observational data with contextual and historical information. Primarily motivated to augment the Health and Retirement Study (HRS) [@University of Michigan:2], the largest ongoing nationally representative survey in the United States, with spatiotemporal data (e.g., air quality, weather, neighborhood characteristics), STITCH is designed to efficiently link large-scale spatiotemporal datasets to individual survey participants based on their reported geographic locations (e.g., census tract FIPS codes, ZIP codes). It also supports the integration of participants’ residential histories, enabling accurate linkage of contextual data to periods of residence and relocation. Designed for local deployment, STITCH provides a reproducible and user-friendly solution for spatiotemporal data integration.
+STITCH is a Python-based framework for linking diverse data sources across geospatial and temporal dimensions, enabling the enrichment of individual-level observational data with contextual and historical information. Primarily motivated to augment the Health and Retirement Study (HRS) [@universityofmichiganWelcomeHealthRetirement], the largest ongoing nationally representative survey in the United States, with spatiotemporal data (e.g., air quality, weather, neighborhood characteristics), STITCH is designed to efficiently link large-scale spatiotemporal datasets to individual survey participants based on their reported geographic locations (e.g., census tract FIPS codes, ZIP codes). It also supports the integration of participants’ residential histories, enabling accurate linkage of contextual data to periods of residence and relocation. Designed for local deployment, STITCH provides a reproducible and user-friendly solution for spatiotemporal data integration.
 
 # Statement of need
 
@@ -122,11 +122,11 @@ After all required data are prepared, STITCH performs time-lagged merges between
 Once all lags have been processed, STITCH loads the temporary files and merges them with the primary dataset to produce the final enriched dataset. An example of the final merged output is shown below.
 
 
-| Participant ID | Interview Date         | Census Tract FIPS Code | Some Other Variable  | 0-day prior PM2.5 | 1-day prior PM2.5 | ... |
-| -------------- | ---------------------- | ---------------------- | -------------------- | ------------------| ------------------| ... |
-| 1              | March 2, 2023          | 12345678910            | Yes                  | X.X                | X.X              | ... |
-| 2              | February 17, 2023      | 67890123456            | No                   | Y.Y                | Z.Z              | ... |
-| 3              | January 30, 2023       | 23456789012            | Yes                  | K.K                | L.L              | ... |
+| Participant ID | Interview Date         | Census Tract FIPS Code | 0-day prior PM2.5  | 1-day prior PM2.5 | ... |
+| -------------- | ---------------------- | ---------------------- | ------------------ | ----------------- | --- |
+| 1              | March 2, 2023          | 12345678910            | X.X                | X.X               | ... |
+| 2              | February 17, 2023      | 67890123456            | Y.Y                | Z.Z               | ... |
+| 3              | January 30, 2023       | 23456789012            | K.K                | L.L               | ... |
 
 : **Example final merged dataset.** For each participant, STITCH computes lagged time points and corresponding locations, extracts the matching contextual values, and merges them back into the primary dataset.
 
@@ -164,4 +164,3 @@ For a quick reference, the following citation commands can be used:
 
 
 # References
-
