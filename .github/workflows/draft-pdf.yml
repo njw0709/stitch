@@ -1,8 +1,6 @@
 name: Draft PDF
 on:
   push:
-    tags:
-      - 'v*.*.*'
 
 jobs:
   paper:
