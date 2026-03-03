@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QListWidget,
 )
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 
 from ..widgets.file_picker import DirectoryPicker
 from ..widgets.data_preview_table import DataPreviewTable
@@ -113,6 +113,11 @@ class ContextualDataPage(QWizardPage):
         self.preview_df = None
         self.validation_thread = None
         self.file_paths = []
+
+        self._debounce_timer = QTimer()
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(400)
+        self._debounce_timer.timeout.connect(self._on_settings_changed_debounced)
 
         # Create layout
         layout = QVBoxLayout()
@@ -259,7 +264,12 @@ class ContextualDataPage(QWizardPage):
         self._validate_directory()
 
     def _on_settings_changed(self):
-        """Handle settings changes (file extension or measure type)."""
+        """Handle settings changes (file extension or measure type) with debounce."""
+        if self.dir_picker.get_path():
+            self._debounce_timer.start()
+
+    def _on_settings_changed_debounced(self):
+        """Debounced handler that actually triggers validation."""
         if self.dir_picker.get_path():
             self._validate_directory()
 
@@ -298,11 +308,24 @@ class ContextualDataPage(QWizardPage):
             columns.append(self.data_col_list.item(i).text())
         self.data_col_hidden.setText(",".join(columns))
 
+    def _stop_validation_thread(self):
+        """Stop the current validation thread if running."""
+        if self.validation_thread is not None:
+            try:
+                self.validation_thread.finished.disconnect(self._on_validation_finished)
+            except TypeError:
+                pass
+            if self.validation_thread.isRunning():
+                self.validation_thread.wait(2000)
+            self.validation_thread = None
+
     def _validate_directory(self):
         """Validate the selected directory in a background thread."""
         dir_path = self.dir_picker.get_path()
         if not dir_path:
             return
+
+        self._stop_validation_thread()
 
         measure_type = self.measure_type_edit.text().strip() or None
 
