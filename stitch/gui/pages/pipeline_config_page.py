@@ -111,7 +111,7 @@ class PipelineConfigPage(QWizardPage):
         summary_lines = []
 
         # HRS Data
-        summary_lines.append("=== HRS Survey Data ===")
+        summary_lines.append("=== Survey Data ===")
         hrs_path = wizard.field("hrs_data_path")
         date_col = wizard.field("date_col")
         id_col = wizard.field("id_col")

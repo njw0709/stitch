@@ -2,7 +2,7 @@
 Performance tests for linkage WITHOUT residential history.
 
 This module tests batch vs parallel processing when survey data contains
-static GEOID columns (e.g., LINKCEN2010_2016, LINKCEN2010_2017) instead of
+static GEOID columns (e.g., GEOID2010_2016, GEOID2010_2017) instead of
 using residential history for dynamic GEOID lookup.
 """
 
@@ -26,7 +26,7 @@ def survey_data_static_geoids(tmp_path, real_geoid_pool):
     Create survey data with static GEOID columns for each year (2016-2020).
 
     This fixture creates survey data WITHOUT needing residential history.
-    Each year has its own GEOID column (e.g., LINKCEN2010_2016).
+    Each year has its own GEOID column (e.g., GEOID2010_2016).
     """
     from tests.data_generators import generate_fake_hhidpn, generate_fake_geoid
 
@@ -54,7 +54,7 @@ def survey_data_static_geoids(tmp_path, real_geoid_pool):
         }
 
         # Add GEOID columns
-        row[f"LINKCEN2010"] = generate_fake_geoid(real_geoid_pool)
+        row[f"GEOID2010"] = generate_fake_geoid(real_geoid_pool)
 
         rows.append(row)
 

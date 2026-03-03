@@ -26,7 +26,7 @@ class ResidentialHistoryHRS:
         mvyear: str = "mvyear",
         mvmonth: str = "mvmonth",
         moved_mark: str = "1. move",
-        geoid: str = "LINKCEN2010",
+        geoid: str = "GEOID2010",
         survey_yr_col: str = "year",
         first_tract_mark: float = 999.0,
     ):
@@ -221,7 +221,7 @@ class HRSInterviewData:
         move: bool = True,
         residential_hist: Optional[ResidentialHistoryHRS] = None,
         hhidpn: str = "hhidpn",
-        geoid_col: str = "LINKCEN2010",
+        geoid_col: str = "GEOID2010",
     ):
         self.filename = Path(filename)
         self.df = read_data(self.filename)

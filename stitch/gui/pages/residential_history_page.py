@@ -177,7 +177,7 @@ class ResidentialHistoryPage(QWizardPage):
 
         self.geoid_combo.clear()
         self.geoid_combo.addItems(columns)
-        self._set_default_if_exists(self.geoid_combo, "LINKCEN2010")
+        self._set_default_if_exists(self.geoid_combo, "GEOID2010")
 
         self.completeChanged.emit()
 

@@ -4,6 +4,7 @@ Pipeline execution page.
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 import re
 
@@ -86,7 +87,7 @@ class PipelineRunner(QThread):
             sys.stderr = OutputRedirector(self.output.emit)
 
             self.output.emit("Starting pipeline execution...")
-            self.output.emit(f"HRS data: {self.args.hrs_data}")
+            self.output.emit(f"Survey data: {self.args.hrs_data}")
             self.output.emit(f"Context directory: {self.args.context_dir}")
             self.output.emit(f"Output: {self.args.save_dir}/{self.args.output_name}")
             self.output.emit(f"Number of lags: {self.args.n_lags}")
@@ -101,6 +102,12 @@ class PipelineRunner(QThread):
             self.finished_signal.emit(True, "Pipeline completed successfully!")
 
         except Exception as e:
+            tb_str = traceback.format_exc()
+            self.output.emit("")
+            self.output.emit("=" * 50)
+            self.output.emit("ERROR ENCOUNTERED")
+            self.output.emit("=" * 50)
+            self.output.emit(tb_str)
             self.finished_signal.emit(False, f"Error running pipeline: {str(e)}")
 
         finally:
@@ -291,7 +298,7 @@ class ExecutionPage(QWizardPage):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Log File",
-            "pipeline_log.txt",
+            "stitch_log.txt",
             "Text Files (*.txt);;All Files (*)",
         )
 
