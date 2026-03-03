@@ -8,7 +8,7 @@ then merging for each lag day. Supports both parallel and sequential processing.
 
 Example:
 --------
-python link_lags.py \
+python stitch_cli.py \
     --hrs-data "C:/path/to/HRSprep2016full.dta" \
     --context-dir "C:/path/to/daily_heat_long" \
     --output "C:/path/to/output/HRSHeatLinked.dta" \
@@ -24,7 +24,7 @@ python link_lags.py \
 
 With residential history:
 -------------------------
-python link_lags.py \
+python stitch_cli.py \
     --hrs-data "C:/path/to/HRSprep2016full.dta" \
     --residential-hist "C:/path/to/residential_history.dta" \
     --res-hist-hhidpn hhidpn \
@@ -91,7 +91,7 @@ def _create_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--data-col",
-        help="Explicit data column name to use (optional, overrides measure type)",
+        help="Explicit data column name to use.",
     )
     parser.add_argument(
         "--geoid-col",
