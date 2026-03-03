@@ -81,7 +81,7 @@ class ResidentialHistoryPage(QWizardPage):
 
         self.survey_yr_combo = QComboBox()
         columns_layout.addRow(
-            "Survey Year Column (Will be used if Move Year is empty):",
+            "Survey entry year column:",
             self.survey_yr_combo,
         )
 
