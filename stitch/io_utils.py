@@ -14,11 +14,57 @@ Supported formats:
 """
 
 from __future__ import annotations
+import inspect
+import re
+import warnings
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
-import inspect
-import pandas as pd
+
 import numpy as np
+import pandas as pd
+
+
+class GeoidTruncationWarning(UserWarning):
+    """Raised when a GEOID value is truncated to 11 digits."""
+
+
+def normalize_geoid_value(val) -> str:
+    """
+    Normalize a single GEOID value to an 11-digit zero-padded string.
+    Strips non-digits (e.g. decimal point from float) so .dta numeric columns match.
+    """
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    # Avoid float string artifacts (e.g. 12345678901.0 -> "1.234...e+10" or precision)
+    if isinstance(val, (int, float)) and not pd.isna(val):
+        try:
+            val = int(val)
+        except (OverflowError, ValueError):
+            pass
+    s = re.sub(r"\D", "", str(val))
+    if not s or s in ("nan", "None", "<NA>"):
+        return ""
+    # GEOID is 11 digits; keep first 11 if stripping produced more (e.g. "12345678901.0" -> "123456789010")
+    if len(s) > 11:
+        s = s[:11]
+    return s.zfill(11)
+
+
+def normalize_geoid_series(series: pd.Series) -> pd.Series:
+    """
+    Normalize a Series of GEOIDs to 11-digit zero-padded strings.
+    Strips non-digits so float-origin values (e.g. from .dta) match contextual data.
+    """
+    digits_only = series.astype(str).str.replace(r"\D", "", regex=True)
+    digits_only = digits_only.replace({"nan": "", "None": "", "<NA>": ""})
+    if (digits_only.str.len() > 11).any():
+        warnings.warn(
+            "Some GEOID values had more than 11 digits after stripping non-digits "
+            "and were truncated to the first 11 digits (e.g. float representation artifacts).",
+            GeoidTruncationWarning,
+            stacklevel=2,
+        )
+    return series.apply(normalize_geoid_value)
 
 
 def _filter_kwargs(func: callable, kwargs: Dict[str, Any]) -> Dict[str, Any]:

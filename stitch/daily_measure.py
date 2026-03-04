@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Union
 import pandas as pd
 import re
 
-from .io_utils import read_data, get_file_format
+from .io_utils import get_file_format, normalize_geoid_series, read_data
 
 # Map file prefix to column name
 FILENAME_TO_VARNAME_DICT = {
@@ -181,7 +181,7 @@ class DailyMeasureData:
             # --- 4. Format columns ---
             if df[self.date_col].dtype != "datetime64[ns]":
                 df[self.date_col] = pd.to_datetime(df[self.date_col], errors="coerce")
-            df[self.geoid_col] = df[self.geoid_col].astype(str).str.zfill(11)
+            df[self.geoid_col] = normalize_geoid_series(df[self.geoid_col])
 
             # --- 5. Filter by GEOID if provided ---
             if self.geoid_filter is not None:
@@ -237,9 +237,7 @@ class DailyMeasureData:
                 for chunk in csv_reader:
                     chunk = self._apply_rename(chunk)
                     # Format GEOID for filtering
-                    chunk[self.geoid_col] = (
-                        chunk[self.geoid_col].astype(str).str.zfill(11)
-                    )
+                    chunk[self.geoid_col] = normalize_geoid_series(chunk[self.geoid_col])
                     # Filter immediately - discard unwanted data early
                     total_before += len(chunk)
                     filtered = chunk[chunk[self.geoid_col].isin(self.geoid_filter)]
@@ -302,7 +300,7 @@ class DailyMeasureData:
                     df[self.date_col] = pd.to_datetime(
                         df[self.date_col], errors="coerce"
                     )
-                df[self.geoid_col] = df[self.geoid_col].astype(str).str.zfill(11)
+                df[self.geoid_col] = normalize_geoid_series(df[self.geoid_col])
 
                 # --- 5. Filter by GEOID if provided (for wide format or non-chunked reads) ---
                 if self.geoid_filter is not None:

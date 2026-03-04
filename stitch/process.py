@@ -3,7 +3,12 @@ from typing import Optional, List, Union
 import argparse
 import pandas as pd
 from tqdm import tqdm
-from .hrs import HRSInterviewData, HRSContextLinker, ResidentialHistoryHRS
+from .hrs import (
+    HRSContextLinker,
+    HRSInterviewData,
+    ResidentialHistoryHRS,
+    normalize_geoid_series,
+)
 from .daily_measure import DailyMeasureDataDir
 from .io_utils import write_data
 
@@ -29,15 +34,7 @@ def convert_geoid_columns_to_string(
     df = df.copy()
     for col in geoid_cols:
         if col in df.columns:
-            # Convert to string, strip non-digits, zero-pad to 11 digits
-            # Missing values become empty strings
-            df[col] = (
-                df[col]
-                .astype(str)
-                .str.replace(r"\D", "", regex=True)
-                .replace({"nan": "", "None": "", "<NA>": ""})
-                .apply(lambda x: x.zfill(11) if x else "")
-            )
+            df[col] = normalize_geoid_series(df[col])
     return df
 
 

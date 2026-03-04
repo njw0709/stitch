@@ -6,7 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from .daily_measure import DailyMeasureDataDir
-from .io_utils import read_data, write_data
+from .io_utils import normalize_geoid_series, normalize_geoid_value, read_data, write_data
 
 
 # ---------------------------------------------------------------------
@@ -83,7 +83,7 @@ class ResidentialHistoryHRS:
                 mvmonth = "01"
             start_dt = pd.to_datetime(f"{mvyear}-{mvmonth}-01")
             dates.append(start_dt)
-            geoids.append(str(first[self.geoid]).zfill(11))
+            geoids.append(normalize_geoid_value(first[self.geoid]))
 
             # Subsequent moves
             moved_rows = df_person[df_person[self.movecol] == self.moved_mark]
@@ -92,7 +92,7 @@ class ResidentialHistoryHRS:
                     f"{int(row[self.mvyear])}-{int(row[self.mvmonth])}-01"
                 )
                 dates.append(dt)
-                geoids.append(str(row[self.geoid]).zfill(11))
+                geoids.append(normalize_geoid_value(row[self.geoid]))
 
             move_info[pid] = (dates, geoids)
         debug = self.debug_move_info(move_info)
@@ -246,7 +246,7 @@ class HRSInterviewData:
 
         # Format the GEOID column if it exists and no residential history
         if not move and geoid_col in self.columns:
-            self.df[geoid_col] = self.df[geoid_col].astype(str).str.zfill(11)
+            self.df[geoid_col] = normalize_geoid_series(self.df[geoid_col])
 
     def get_geoid_based_on_date(self, date_series: pd.Series) -> pd.Series:
         return self.residential_hist.create_geoid_based_on_date(
@@ -260,15 +260,7 @@ class HRSInterviewData:
         df_to_save = self.df.copy()
         for col in geoid_cols:
             if col in df_to_save.columns:
-                # Convert to string, strip non-digits, zero-pad to 11 digits
-                # Missing values become empty strings
-                df_to_save[col] = (
-                    df_to_save[col]
-                    .astype(str)
-                    .str.replace(r"\D", "", regex=True)
-                    .replace({"nan": "", "None": "", "<NA>": ""})
-                    .apply(lambda x: x.zfill(11) if x else "")
-                )
+                df_to_save[col] = normalize_geoid_series(df_to_save[col])
         write_data(df_to_save, save_name)
 
 
@@ -389,7 +381,7 @@ class HRSContextLinker:
             # Use the specified static GEOID column directly
             if geoid_col is None:
                 geoid_col = hrs_data.geoid_col
-            geoids = hrs_data.df[geoid_col].astype(str).str.zfill(11)
+            geoids = normalize_geoid_series(hrs_data.df[geoid_col])
         return geoids
 
     @staticmethod
