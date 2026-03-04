@@ -2,6 +2,8 @@
 Residential History configuration page.
 """
 
+from pathlib import Path
+
 import pandas as pd
 
 from PyQt6.QtWidgets import (
@@ -17,7 +19,8 @@ from PyQt6.QtWidgets import (
 
 from ..widgets.file_picker import FilePicker
 from ..widgets.data_preview_table import DataPreviewTable
-from ..validators import validate_stata_file, load_preview_data
+from ...io_utils import read_data
+from ..validators import validate_data_file, load_preview_data
 
 
 class ResidentialHistoryPage(QWizardPage):
@@ -48,7 +51,15 @@ class ResidentialHistoryPage(QWizardPage):
 
         # File selection
         file_layout = QFormLayout()
-        self.file_picker = FilePicker(file_filter="Stata Files (*.dta);;All Files (*)")
+        self.file_picker = FilePicker(
+            file_filter="All Supported Files (*.dta *.csv *.parquet *.pq *.feather *.xlsx *.xls);;"
+            "Stata Files (*.dta);;"
+            "CSV Files (*.csv);;"
+            "Parquet Files (*.parquet *.pq);;"
+            "Feather Files (*.feather);;"
+            "Excel Files (*.xlsx *.xls);;"
+            "All Files (*)"
+        )
         self.file_picker.fileSelected.connect(self._on_file_selected)
         file_layout.addRow("Residential History File:", self.file_picker)
 
@@ -131,7 +142,7 @@ class ResidentialHistoryPage(QWizardPage):
     def _on_file_selected(self, file_path: str):
         """Handle file selection."""
         # Validate file
-        is_valid, error_msg = validate_stata_file(file_path)
+        is_valid, error_msg = validate_data_file(file_path)
 
         if not is_valid:
             QMessageBox.warning(self, "Invalid File", error_msg)
@@ -187,14 +198,9 @@ class ResidentialHistoryPage(QWizardPage):
             return
 
         try:
-            # Read first 1000 rows to get unique values
+            # Read first 1000 rows to get unique values (any supported format)
             file_path = self.file_picker.get_path()
-            df = pd.read_stata(
-                file_path, chunksize=None, iterator=False, columns=[col_name]
-            )
-
-            # Limit to first 1000 rows
-            df = df.head(1000)
+            df = read_data(Path(file_path), usecols=[col_name]).head(1000)
 
             # Get unique values and convert to strings
             unique_values = df[col_name].dropna().unique()
