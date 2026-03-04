@@ -18,7 +18,7 @@ Download the pre-built standalone application for your platform:
 
 - **macOS (Apple Silicon/M1/M2/M3)**: [Download STITCH-macOS-ARM.zip](https://github.com/njw0709/stitch/releases/latest/download/STITCH-macOS-ARM.zip)
   - Extract the ZIP file and run `STITCH.app`
-  - **First-time users**: Right-click the app and select "Open" to bypass macOS Gatekeeper (app is unsigned)
+  - **First-time users**: Right-click the app and select "Open" to bypass macOS Gatekeeper (app is unsigned).  If it does not show you an option to "Open Anyway", you can go to System Preferences > Security & Privacy > General and click "Allow Anyway" for STITCH.app.
   - If you see "damaged" error, run in Terminal: `xattr -cr /path/to/STITCH.app`
 
 - **Windows**: [Download STITCH-Windows.zip](https://github.com/njw0709/stitch/releases/latest/download/STITCH-Windows.zip)
