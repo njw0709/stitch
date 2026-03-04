@@ -3,13 +3,13 @@ Pipeline execution page.
 """
 
 import argparse
-import sys
-import traceback
+import threading
 from pathlib import Path
 import re
 
 from PyQt6.QtWidgets import (
     QWizardPage,
+    QWizard,
     QVBoxLayout,
     QPushButton,
     QTextEdit,
@@ -21,71 +21,49 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QThread, pyqtSignal, QUrl
 from PyQt6.QtGui import QDesktopServices
 
-from stitch.process import run_pipeline
+from stitch.process import run_pipeline, PipelineCancelledError
 
 
-# Regex to remove most emoji code points while preserving non-emoji Unicode
 EMOJI_PATTERN = re.compile(
-    "[\U0001f600-\U0001f64f"  # emoticons
-    "\U0001f300-\U0001f5ff"  # symbols & pictographs
-    "\U0001f680-\U0001f6ff"  # transport & map
-    "\U0001f1e0-\U0001f1ff"  # flags
-    "\U00002702-\U000027b0"  # dingbats
-    "\U000024c2-\U0001f251"  # enclosed characters
-    "\U0001f900-\U0001f9ff"  # supplemental symbols & pictographs
-    "\U0001fa70-\U0001faff"  # extended-A
-    "\U00002600-\U000026ff"  # misc symbols
-    "\U00002300-\U000023ff"  # misc technical
+    "[\U0001f600-\U0001f64f"
+    "\U0001f300-\U0001f5ff"
+    "\U0001f680-\U0001f6ff"
+    "\U0001f1e0-\U0001f1ff"
+    "\U00002702-\U000027b0"
+    "\U000024c2-\U0001f251"
+    "\U0001f900-\U0001f9ff"
+    "\U0001fa70-\U0001faff"
+    "\U00002600-\U000026ff"
+    "\U00002300-\U000023ff"
     "]+",
     flags=re.UNICODE,
 )
 
 
 def remove_emojis(text: str) -> str:
-    """Remove emoji-related code points from text.
-
-    Keeps regular Unicode letters/numbers; strips common emoji ranges,
-    zero-width joiner and variation selector.
-    """
+    """Remove emoji-related code points from text."""
     text = text.replace("\u200d", "").replace("\ufe0f", "")
     return EMOJI_PATTERN.sub("", text)
-
-
-class OutputRedirector:
-    """Redirects stdout/stderr to Qt signal."""
-
-    def __init__(self, emit_func):
-        self.emit_func = emit_func
-
-    def write(self, text):
-        if text.strip():
-            self.emit_func(text.rstrip())
-
-    def flush(self):
-        pass
 
 
 class PipelineRunner(QThread):
     """Thread for running the pipeline function."""
 
-    output = pyqtSignal(str)  # Emits output lines
+    output = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)  # success, message
 
     def __init__(self, args: argparse.Namespace):
         super().__init__()
         self.args = args
+        self._cancel_event = threading.Event()
+
+    def cancel(self):
+        """Request cancellation of the running pipeline."""
+        self._cancel_event.set()
 
     def run(self):
-        """Run the pipeline function."""
-        # Save original stdout/stderr
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-
+        """Run the pipeline, routing log output through the Qt signal."""
         try:
-            # Redirect stdout and stderr to capture print statements
-            sys.stdout = OutputRedirector(self.output.emit)
-            sys.stderr = OutputRedirector(self.output.emit)
-
             self.output.emit("Starting pipeline execution...")
             self.output.emit(f"Survey data: {self.args.hrs_data}")
             self.output.emit(f"Context directory: {self.args.context_dir}")
@@ -96,30 +74,34 @@ class PipelineRunner(QThread):
             )
             self.output.emit("")
 
-            # Call the pipeline function directly
-            run_pipeline(self.args)
+            run_pipeline(
+                self.args,
+                log_func=self.output.emit,
+                cancel_check=self._cancel_event.is_set,
+            )
 
             self.finished_signal.emit(True, "Pipeline completed successfully!")
 
+        except PipelineCancelledError:
+            self.output.emit("")
+            self.output.emit("Pipeline was cancelled by user.")
+            self.finished_signal.emit(False, "Pipeline cancelled.")
+
         except Exception as e:
-            tb_str = traceback.format_exc()
             self.output.emit("")
             self.output.emit("=" * 50)
-            self.output.emit("ERROR ENCOUNTERED")
+            self.output.emit(f"ERROR: {e}")
             self.output.emit("=" * 50)
-            self.output.emit(tb_str)
-            self.finished_signal.emit(False, f"Error running pipeline: {str(e)}")
-
-        finally:
-            # Restore original stdout/stderr
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
+            self.finished_signal.emit(False, f"Error running pipeline: {e}")
 
 
 class ExecutionPage(QWizardPage):
     """
     Wizard page for executing the pipeline.
     """
+
+    _RUN_STYLE = "background-color: #4CAF50; color: white; font-weight: bold;"
+    _STOP_STYLE = "background-color: #d9534f; color: white; font-weight: bold;"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -130,10 +112,8 @@ class ExecutionPage(QWizardPage):
         self.pipeline_running = False
         self.pipeline_completed = False
 
-        # Create layout
         layout = QVBoxLayout()
 
-        # Instructions
         instructions = QLabel(
             "Click 'Run Pipeline' to start the linkage process. "
             "This may take a while depending on the number of lags and data size."
@@ -145,9 +125,7 @@ class ExecutionPage(QWizardPage):
         button_layout = QHBoxLayout()
 
         self.run_button = QPushButton("Run Pipeline")
-        self.run_button.setStyleSheet(
-            "background-color: #4CAF50; color: white; font-weight: bold;"
-        )
+        self.run_button.setStyleSheet(self._RUN_STYLE)
         self.run_button.clicked.connect(self._run_pipeline)
         button_layout.addWidget(self.run_button)
 
@@ -166,7 +144,7 @@ class ExecutionPage(QWizardPage):
 
         # Progress bar
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)  # Indeterminate
+        self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
@@ -191,7 +169,6 @@ class ExecutionPage(QWizardPage):
         if not wizard:
             return argparse.Namespace()
 
-        # Build arguments namespace
         args = argparse.Namespace(
             hrs_data=wizard.field("hrs_data_path"),
             context_dir=wizard.field("context_dir"),
@@ -209,11 +186,9 @@ class ExecutionPage(QWizardPage):
             include_lag_date=wizard.field("include_lag_date"),
         )
 
-        # Optional: file extension
         file_ext = wizard.field("file_extension")
         args.file_extension = file_ext if file_ext != "Auto-detect" else None
 
-        # Optional: residential history
         if wizard.field("use_residential_hist"):
             args.residential_hist = wizard.field("residential_hist_path")
             args.res_hist_hhidpn = wizard.field("res_hist_hhidpn")
@@ -223,7 +198,6 @@ class ExecutionPage(QWizardPage):
             args.res_hist_moved_mark = wizard.field("res_hist_moved_mark")
             args.res_hist_geoid = wizard.field("res_hist_geoid")
             args.res_hist_survey_yr_col = wizard.field("res_hist_survey_yr_col")
-            # Convert first tract mark to float to match CLI behavior
             _first_mark = wizard.field("res_hist_first_tract_mark")
             try:
                 args.res_hist_first_tract_mark = float(_first_mark)
@@ -234,29 +208,46 @@ class ExecutionPage(QWizardPage):
 
         return args
 
+    # ------------------------------------------------------------------
+    # Pipeline lifecycle
+    # ------------------------------------------------------------------
+
+    def _set_wizard_nav_enabled(self, enabled: bool):
+        """Enable or disable the wizard Back / Cancel buttons."""
+        wizard = self.wizard()
+        if not wizard:
+            return
+        for btn_role in (
+            QWizard.WizardButton.BackButton,
+            QWizard.WizardButton.CancelButton,
+        ):
+            btn = wizard.button(btn_role)
+            if btn:
+                btn.setEnabled(enabled)
+
     def _run_pipeline(self):
         """Start the pipeline execution."""
         if self.pipeline_running:
-            QMessageBox.warning(
-                self,
-                "Pipeline Running",
-                "Pipeline is already running. Please wait for it to complete.",
-            )
             return
 
-        # Build arguments
         args = self._build_args()
 
-        # Show configuration in output
         self.output_text.clear()
         self.output_text.append("=== Pipeline Configuration ===")
 
-        # Update UI
+        # Update UI state
         self.pipeline_running = True
         self.pipeline_completed = False
-        self.run_button.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.status_label.setText("Running pipeline...")
+
+        # Swap button to "Stop Pipeline"
+        self.run_button.setText("Stop Pipeline")
+        self.run_button.setStyleSheet(self._STOP_STYLE)
+        self.run_button.clicked.disconnect()
+        self.run_button.clicked.connect(self._stop_pipeline)
+
+        self._set_wizard_nav_enabled(False)
 
         # Start runner thread
         self.runner_thread = PipelineRunner(args)
@@ -264,11 +255,16 @@ class ExecutionPage(QWizardPage):
         self.runner_thread.finished_signal.connect(self._on_finished)
         self.runner_thread.start()
 
+    def _stop_pipeline(self):
+        """Request cancellation of the running pipeline."""
+        if self.runner_thread is not None:
+            self.runner_thread.cancel()
+        self.run_button.setEnabled(False)
+        self.status_label.setText("Cancelling pipeline...")
+
     def _on_output(self, line: str):
         """Handle output from pipeline."""
         self.output_text.append(line)
-
-        # Auto-scroll to bottom
         scrollbar = self.output_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
@@ -277,19 +273,30 @@ class ExecutionPage(QWizardPage):
         self.pipeline_running = False
         self.pipeline_completed = success
 
+        # Restore "Run Pipeline" button
+        self.run_button.setText("Run Pipeline")
+        self.run_button.setStyleSheet(self._RUN_STYLE)
+        self.run_button.clicked.disconnect()
+        self.run_button.clicked.connect(self._run_pipeline)
         self.run_button.setEnabled(True)
+
         self.progress_bar.setVisible(False)
         self.save_log_button.setEnabled(True)
+        self._set_wizard_nav_enabled(True)
 
         if success:
-            self.status_label.setText(f"✓ {message}")
+            self.status_label.setText(f"Done - {message}")
             self.open_output_button.setEnabled(True)
             QMessageBox.information(self, "Success", message)
         else:
-            self.status_label.setText(f"✗ {message}")
+            self.status_label.setText(f"Stopped - {message}")
             QMessageBox.critical(self, "Error", message)
 
         self.completeChanged.emit()
+
+    # ------------------------------------------------------------------
+    # Utility actions
+    # ------------------------------------------------------------------
 
     def _save_log(self):
         """Save the output log to a file."""

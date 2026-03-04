@@ -1,11 +1,17 @@
 from pathlib import Path
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Callable
 import argparse
 import pandas as pd
 from tqdm import tqdm
 from .hrs import HRSInterviewData, HRSContextLinker, ResidentialHistoryHRS
 from .daily_measure import DailyMeasureDataDir
 from .io_utils import write_data
+
+
+class PipelineCancelledError(Exception):
+    """Raised when the pipeline is cancelled by the user."""
+
+    pass
 
 
 def convert_geoid_columns_to_string(
@@ -138,6 +144,8 @@ def process_multiple_lags_batch(
     geoid_col: Optional[str] = None,
     include_lag_date: bool = False,
     file_format: str = "parquet",
+    log_func: Optional[Callable[[str], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> List[Path]:
     """
     Process multiple lags with batch optimization using pre-computed columns and filtering.
@@ -170,42 +178,48 @@ def process_multiple_lags_batch(
         Whether to include lag date columns in output
     file_format : {"parquet", "feather", "csv"}, default "parquet"
         File format for temporary output files
+    log_func : callable, optional
+        Logging callback ``f(message: str) -> None``. Defaults to ``print``.
+    cancel_check : callable, optional
+        Returns ``True`` when the caller wants to abort the pipeline.
 
     Returns
     -------
     List[Path]
         List of paths to temporary files created for each lag
     """
+    log = log_func or print
+
     if geoid_col is None:
         geoid_col = hrs_data.geoid_col
 
-    print(f"\n🔄 Starting batch processing for {len(n_days)} lags...")
+    log(f"\nStarting batch processing for {len(n_days)} lags...")
 
     # Step 1: Pre-compute all lag columns
-    print(f"📋 Pre-computing date/GEOID columns for lags: {n_days}")
+    log(f"Pre-computing date/GEOID columns for lags: {n_days}")
     hrs_with_lags = HRSContextLinker.prepare_lag_columns_batch(
         hrs_data, n_days, geoid_col
     )
 
     # Step 2: Extract unique GEOIDs
     unique_geoids = extract_unique_geoids(hrs_with_lags, geoid_col)
-    print(f"🔍 Extracted {len(unique_geoids)} unique GEOIDs from all lag columns")
+    log(f"Extracted {len(unique_geoids)} unique GEOIDs from all lag columns")
 
     # Step 3: Compute required years and load filtered contextual data
     max_lag = max(n_days)
     required_years = compute_required_years(hrs_data, max_lag)
     available_years = set(contextual_dir.list_years())
     years_to_load = [str(y) for y in required_years if str(y) in available_years]
-    print(f"📅 Loading years: {years_to_load}")
+    log(f"Loading years: {years_to_load}")
 
     # Set filter and preload
     contextual_dir.geoid_filter = unique_geoids
     contextual_dir.preload_years(years_to_load)
 
     # Concatenate all years
-    print(f"🔗 Concatenating filtered contextual data...")
+    log("Concatenating filtered contextual data...")
     contextual_df = pd.concat([contextual_dir[yr].df for yr in years_to_load], axis=0)
-    print(f"  Contextual data shape: {contextual_df.shape}")
+    log(f"  Contextual data shape: {contextual_df.shape}")
 
     # Extract metadata once to avoid repeated access to contextual_dir
     first_year = years_to_load[0]
@@ -220,24 +234,25 @@ def process_multiple_lags_batch(
     )
     n_duplicates = duplicate_mask.sum()
     if n_duplicates > 0:
-        print(
-            f"⚠️  Warning: Found {n_duplicates} duplicate date-geoid pairs in contextual data"
+        log(
+            f"Warning: Found {n_duplicates} duplicate date-geoid pairs in contextual data"
         )
-        # Show a few examples
         duplicate_examples = contextual_df[duplicate_mask].head(5)[
             [contextual_date_col, contextual_geoid_col]
         ]
-        print(f"  Example duplicates:\n{duplicate_examples}")
-        # Remove duplicates, keeping the first occurrence
+        log(f"  Example duplicates:\n{duplicate_examples}")
         contextual_df = contextual_df.drop_duplicates(
             subset=[contextual_date_col, contextual_geoid_col], keep="first"
         )
-        print(f"  Removed duplicates. New shape: {contextual_df.shape}")
+        log(f"  Removed duplicates. New shape: {contextual_df.shape}")
 
     # Step 4: Process each lag using pre-computed data
     temp_files = []
     for n in tqdm(n_days, desc="Processing lags", unit="lag"):
-        print(f"  Processing lag {n}...")
+        if cancel_check and cancel_check():
+            raise PipelineCancelledError("Pipeline cancelled by user")
+
+        log(f"  Processing lag {n}...")
 
         out_df = HRSContextLinker.output_merged_columns(
             hrs_data,
@@ -269,9 +284,9 @@ def process_multiple_lags_batch(
         write_data(out_df, temp_file, index=False)
 
         temp_files.append(temp_file)
-        print(f"    ✓ Saved to {temp_file.name}")
+        log(f"    Saved to {temp_file.name}")
 
-    print(f"✅ Batch processing complete! Generated {len(temp_files)} files\n")
+    log(f"Batch processing complete! Generated {len(temp_files)} files\n")
     return temp_files
 
 
@@ -287,6 +302,8 @@ def process_multiple_lags_parallel(
     file_format: str = "parquet",
     max_workers: Optional[int] = None,
     auto_memory_limit: bool = True,
+    log_func: Optional[Callable[[str], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> List[Path]:
     """
     Process multiple lags with parallel processing using ThreadPoolExecutor.
@@ -322,6 +339,10 @@ def process_multiple_lags_parallel(
         If True and max_workers is None, automatically calculate max_workers
         based on available system memory to prevent OOM errors. Assumes ~2GB
         per worker thread as a conservative estimate.
+    log_func : callable, optional
+        Logging callback ``f(message: str) -> None``. Defaults to ``print``.
+    cancel_check : callable, optional
+        Returns ``True`` when the caller wants to abort the pipeline.
 
     Returns
     -------
@@ -332,14 +353,16 @@ def process_multiple_lags_parallel(
     from .hrs import HRSContextLinker
     import os
 
+    log = log_func or print
+
     if geoid_col is None:
         geoid_col = hrs_data.geoid_col
 
-    print(f"\n🚀 Starting parallel processing for {len(n_days)} lags...")
+    log(f"\nStarting parallel processing for {len(n_days)} lags...")
 
     # Step 1: Pre-compute all lag columns
-    print(
-        f"📋 Pre-computing date/GEOID columns for lags: {min(n_days)} to {max(n_days)}"
+    log(
+        f"Pre-computing date/GEOID columns for lags: {min(n_days)} to {max(n_days)}"
     )
     hrs_with_lags = HRSContextLinker.prepare_lag_columns_batch(
         hrs_data, n_days, geoid_col
@@ -347,23 +370,23 @@ def process_multiple_lags_parallel(
 
     # Step 2: Extract unique GEOIDs
     unique_geoids = extract_unique_geoids(hrs_with_lags, geoid_col)
-    print(f"🔍 Extracted {len(unique_geoids)} unique GEOIDs from all lag columns")
+    log(f"Extracted {len(unique_geoids)} unique GEOIDs from all lag columns")
 
     # Step 3: Compute required years and load filtered contextual data
     max_lag = max(n_days)
     required_years = compute_required_years(hrs_data, max_lag)
     available_years = set(contextual_dir.list_years())
     years_to_load = [str(y) for y in required_years if str(y) in available_years]
-    print(f"📅 Loading years: {years_to_load}")
+    log(f"Loading years: {years_to_load}")
 
     # Set filter and preload
     contextual_dir.geoid_filter = unique_geoids
     contextual_dir.preload_years(years_to_load)
 
     # Concatenate all years
-    print(f"🔗 Concatenating filtered contextual data...")
+    log("Concatenating filtered contextual data...")
     contextual_df = pd.concat([contextual_dir[yr].df for yr in years_to_load], axis=0)
-    print(f"  Contextual data shape: {contextual_df.shape}")
+    log(f"  Contextual data shape: {contextual_df.shape}")
 
     # Extract metadata once to avoid accessing contextual_dir in threads
     first_year = years_to_load[0]
@@ -378,36 +401,30 @@ def process_multiple_lags_parallel(
     )
     n_duplicates = duplicate_mask.sum()
     if n_duplicates > 0:
-        print(
-            f"⚠️  Warning: Found {n_duplicates} duplicate date-geoid pairs in contextual data"
+        log(
+            f"Warning: Found {n_duplicates} duplicate date-geoid pairs in contextual data"
         )
-        # Show a few examples
         duplicate_examples = contextual_df[duplicate_mask].head(5)[
             [contextual_date_col, contextual_geoid_col]
         ]
-        print(f"  Example duplicates:\n{duplicate_examples}")
-        # Remove duplicates, keeping the first occurrence
+        log(f"  Example duplicates:\n{duplicate_examples}")
         contextual_df = contextual_df.drop_duplicates(
             subset=[contextual_date_col, contextual_geoid_col], keep="first"
         )
-        print(f"  Removed duplicates. New shape: {contextual_df.shape}")
+        log(f"  Removed duplicates. New shape: {contextual_df.shape}")
 
     # Auto-calculate max_workers based on available memory if not specified
     if max_workers is None and auto_memory_limit:
         try:
             import psutil
 
-            # Get available memory in GB
             mem = psutil.virtual_memory()
             available_gb = mem.available / (1024**3)
 
-            # Calculate shared data size
             hrs_size_mb = hrs_with_lags.memory_usage(deep=True).sum() / (1024 * 1024)
             ctx_size_mb = contextual_df.memory_usage(deep=True).sum() / (1024 * 1024)
             shared_size_gb = (hrs_size_mb + ctx_size_mb) / 1024
 
-            # Conservative estimate: 2GB per worker + shared data
-            # Use 70% of available memory as safety margin
             usable_gb = (available_gb * 0.7) - shared_size_gb
             gb_per_worker = 2.0
 
@@ -416,33 +433,32 @@ def process_multiple_lags_parallel(
                 max_workers_by_cpu = os.cpu_count() or 1
                 max_workers = max(1, min(max_workers_by_memory, max_workers_by_cpu))
 
-                print(f"🧮 Memory-aware worker calculation:")
-                print(f"   Available memory: {available_gb:.1f} GB")
-                print(f"   Shared data: {shared_size_gb:.1f} GB")
-                print(f"   Usable for workers: {usable_gb:.1f} GB")
-                print(f"   Max workers (memory): {max_workers_by_memory}")
-                print(f"   Max workers (CPU): {max_workers_by_cpu}")
-                print(f"   Selected max_workers: {max_workers}")
+                log(f"Memory-aware worker calculation:")
+                log(f"   Available memory: {available_gb:.1f} GB")
+                log(f"   Shared data: {shared_size_gb:.1f} GB")
+                log(f"   Usable for workers: {usable_gb:.1f} GB")
+                log(f"   Max workers (memory): {max_workers_by_memory}")
+                log(f"   Max workers (CPU): {max_workers_by_cpu}")
+                log(f"   Selected max_workers: {max_workers}")
             else:
                 max_workers = 1
-                print(
-                    f"⚠️  Limited memory available ({available_gb:.1f} GB), using max_workers=1"
+                log(
+                    f"Limited memory available ({available_gb:.1f} GB), using max_workers=1"
                 )
 
         except ImportError:
-            print("⚠️  psutil not available, using default max_workers")
+            log("psutil not available, using default max_workers")
             max_workers = None
         except Exception as e:
-            print(f"⚠️  Error calculating memory-based max_workers: {e}")
-            print("   Falling back to default max_workers")
+            log(f"Error calculating memory-based max_workers: {e}")
+            log("   Falling back to default max_workers")
             max_workers = None
 
     # Step 4: Process lags in parallel using threads (shares memory)
-    print(f"⚡ Processing {len(n_days)} lags in parallel...")
+    log(f"Processing {len(n_days)} lags in parallel...")
     temp_files = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
         futures = {
             executor.submit(
                 _process_single_lag_internal,
@@ -463,22 +479,26 @@ def process_multiple_lags_parallel(
             for n in n_days
         }
 
-        # Collect results as they complete
         for fut in tqdm(
             as_completed(futures),
             total=len(futures),
             desc="Processing lags",
             unit="lag",
         ):
+            if cancel_check and cancel_check():
+                for pending in futures:
+                    pending.cancel()
+                raise PipelineCancelledError("Pipeline cancelled by user")
+
             n = futures[fut]
             try:
                 result = fut.result()
                 if result is not None:
                     temp_files.append(result)
             except Exception as e:
-                print(f"  ❌ Error processing lag {n}: {e}")
+                log(f"  Error processing lag {n}: {e}")
 
-    print(f"✅ Parallel processing complete! Generated {len(temp_files)} files\n")
+    log(f"Parallel processing complete! Generated {len(temp_files)} files\n")
     return temp_files
 
 
@@ -641,7 +661,11 @@ def _process_single_lag_internal(
         return None
 
 
-def run_pipeline(args: argparse.Namespace):
+def run_pipeline(
+    args: argparse.Namespace,
+    log_func: Optional[Callable[[str], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
+):
     """
     Run the complete lagged contextual data linkage pipeline.
 
@@ -673,20 +697,28 @@ def run_pipeline(args: argparse.Namespace):
         - include_lag_date: Whether to include lag date columns
         - residential_hist: Path to residential history file (optional)
         - res_hist_*: Residential history configuration parameters
+    log_func : callable, optional
+        Logging callback ``f(message: str) -> None``. Defaults to ``print``.
+    cancel_check : callable, optional
+        Returns ``True`` when the caller wants to abort the pipeline.
     """
+    log = log_func or print
     hrs_path = Path(args.hrs_data)
     context_dir = Path(args.context_dir)
     out_path = Path(args.save_dir) / Path(args.output_name)
 
     if not hrs_path.exists():
-        raise FileNotFoundError(f"HRS file not found: {hrs_path}")
+        raise FileNotFoundError(f"Survey data file not found: {hrs_path}")
     if not context_dir.exists():
         raise FileNotFoundError(f"Contextual data directory not found: {context_dir}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if cancel_check and cancel_check():
+        raise PipelineCancelledError("Pipeline cancelled by user")
+
     # Load residential history (optional)
     if args.residential_hist:
-        print("Loading residential history...")
+        log("Loading residential history...")
         residential_hist = ResidentialHistoryHRS(
             filename=Path(args.residential_hist),
             hhidpn=args.res_hist_hhidpn,
@@ -701,8 +733,11 @@ def run_pipeline(args: argparse.Namespace):
     else:
         residential_hist = None
 
-    # Load HRS data
-    print("Loading HRS interview data...")
+    if cancel_check and cancel_check():
+        raise PipelineCancelledError("Pipeline cancelled by user")
+
+    # Load survey data
+    log("Loading survey interview data...")
     hrs_epi_data = HRSInterviewData(
         hrs_path,
         datecol=args.date_col,
@@ -712,14 +747,13 @@ def run_pipeline(args: argparse.Namespace):
         geoid_col=args.geoid_col,
     )
 
-    # Load contextual data
-    print(f"Loading contextual daily data ({args.measure_type})...")
-    # Use context_date_col if provided, otherwise default to "Date"
-    context_date_col = getattr(args, "context_date_col", None) or "Date"
-    # Use contextual_geoid_col if provided, otherwise default to "GEOID10"
-    contextual_geoid_col = getattr(args, "contextual_geoid_col", None) or "GEOID10"
+    if cancel_check and cancel_check():
+        raise PipelineCancelledError("Pipeline cancelled by user")
 
-    # Parse data_col (may be comma-separated string or list)
+    # Load contextual data
+    log(f"Loading contextual daily data ({args.measure_type})...")
+    context_date_col = getattr(args, "context_date_col", None) or "Date"
+    contextual_geoid_col = getattr(args, "contextual_geoid_col", None) or "GEOID10"
     if isinstance(args.data_col, str):
         data_cols = [col.strip() for col in args.data_col.split(",")]
     else:
@@ -737,13 +771,12 @@ def run_pipeline(args: argparse.Namespace):
     # Process lags (parallel or batch)
     temp_dir = Path(args.save_dir) / "temp_lag_files"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Temporary lag files will be saved to: {temp_dir}")
+    log(f"Temporary lag files will be saved to: {temp_dir}")
 
-    # Generate list of lags to process
     lags_to_process = list(range(args.n_lags))
 
     if args.parallel:
-        print(f"Using parallel processing for {args.n_lags} lags")
+        log(f"Using parallel processing for {args.n_lags} lags")
         temp_files = process_multiple_lags_parallel(
             hrs_data=hrs_epi_data,
             contextual_dir=contextual_data_all,
@@ -754,9 +787,11 @@ def run_pipeline(args: argparse.Namespace):
             geoid_col=args.geoid_col,
             include_lag_date=args.include_lag_date,
             file_format="parquet",
+            log_func=log,
+            cancel_check=cancel_check,
         )
     else:
-        print(f"Using batch processing for {args.n_lags} lags")
+        log(f"Using batch processing for {args.n_lags} lags")
         temp_files = process_multiple_lags_batch(
             hrs_data=hrs_epi_data,
             contextual_dir=contextual_data_all,
@@ -767,14 +802,18 @@ def run_pipeline(args: argparse.Namespace):
             geoid_col=args.geoid_col,
             include_lag_date=args.include_lag_date,
             file_format="parquet",
+            log_func=log,
+            cancel_check=cancel_check,
         )
 
-    print(f"Finished processing {len(temp_files)} lag files")
-    # clean up
+    log(f"Finished processing {len(temp_files)} lag files")
     del contextual_data_all
 
+    if cancel_check and cancel_check():
+        raise PipelineCancelledError("Pipeline cancelled by user")
+
     # Merge all lag outputs
-    print(f"Merging {len(temp_files)} lag outputs with main HRS data...")
+    log(f"Merging {len(temp_files)} lag outputs with main survey data...")
     final_df = hrs_epi_data.df
 
     # Filter files to current measure type (prefix) to avoid leftovers, then sort by lag
@@ -787,13 +826,15 @@ def run_pipeline(args: argparse.Namespace):
     lag_cols = []
 
     for i, f in enumerate(temp_files):
+        if cancel_check and cancel_check():
+            raise PipelineCancelledError("Pipeline cancelled by user")
+
         if (i + 1) % 100 == 0:
-            print(f"  Processed {i + 1}/{len(temp_files)} files...")
+            log(f"  Processed {i + 1}/{len(temp_files)} files...")
 
         lag_df = pd.read_parquet(f)
 
         # --- Safety checks ---
-        # 1. Matching number of rows
         if len(lag_df) != len(final_df):
             raise ValueError(
                 f"Row count mismatch in lag file {f}: "
@@ -841,7 +882,6 @@ def run_pipeline(args: argparse.Namespace):
     ]
     final_df = convert_geoid_columns_to_string(final_df, geoid_cols)
 
-    # Save final dataset (use centralized writer for dtype conversion/sanitation)
-    print(f"Saving final dataset to {out_path}")
+    log(f"Saving final dataset to {out_path}")
     write_data(final_df, out_path)
-    print("Done.")
+    log("Done.")
