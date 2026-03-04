@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtWidgets import (
+    QApplication,
     QWizardPage,
     QVBoxLayout,
     QHBoxLayout,
@@ -15,11 +16,9 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QLineEdit,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QListWidget,
 )
-from PyQt6.QtCore import QThread, pyqtSignal
 
 from ..widgets.file_picker import DirectoryPicker
 from ..widgets.data_preview_table import DataPreviewTable
@@ -28,74 +27,6 @@ from ..validators import (
     check_column_consistency,
     load_preview_data,
 )
-
-
-class ValidationThread(QThread):
-    """Thread for validating contextual data directory."""
-
-    finished = pyqtSignal(bool, str, list, list)  # success, message, years, file_paths
-
-    def __init__(
-        self, dir_path: str, measure_type: Optional[str], file_extension: Optional[str]
-    ):
-        super().__init__()
-        self.dir_path = dir_path
-        self.measure_type = measure_type
-        self.file_extension = file_extension
-
-    def run(self):
-        """Run validation in background thread."""
-        try:
-            # Validate directory and get years
-            is_valid, years, error_msg = validate_contextual_directory(
-                self.dir_path, self.measure_type, self.file_extension
-            )
-
-            if not is_valid:
-                self.finished.emit(False, error_msg, [], [])
-                return
-
-            # Get file paths for consistency check
-            dirpath = Path(self.dir_path)
-
-            if self.file_extension is None:
-                supported_extensions = [
-                    ".csv",
-                    ".dta",
-                    ".parquet",
-                    ".pq",
-                    ".feather",
-                    ".xlsx",
-                    ".xls",
-                ]
-            else:
-                supported_extensions = [self.file_extension]
-
-            all_files = []
-            for ext in supported_extensions:
-                all_files.extend(dirpath.glob(f"*{ext}"))
-
-            if self.measure_type is not None:
-                file_paths = [f for f in all_files if self.measure_type in f.name]
-            else:
-                file_paths = all_files
-
-            # Check column consistency
-            is_valid, error_msg = check_column_consistency(file_paths)
-
-            if not is_valid:
-                self.finished.emit(False, error_msg, years, file_paths)
-                return
-
-            self.finished.emit(
-                True,
-                f"Found {len(file_paths)} valid files for years: {', '.join(years)}",
-                years,
-                file_paths,
-            )
-
-        except Exception as e:
-            self.finished.emit(False, f"Validation error: {str(e)}", [], [])
 
 
 class ContextualDataPage(QWizardPage):
@@ -111,7 +42,6 @@ class ContextualDataPage(QWizardPage):
         )
 
         self.preview_df = None
-        self.validation_thread = None
         self.file_paths = []
 
         # Create layout
@@ -130,26 +60,42 @@ class ContextualDataPage(QWizardPage):
         self.file_ext_combo.addItems(
             ["Auto-detect", ".csv", ".parquet", ".dta", ".feather", ".xlsx"]
         )
-        self.file_ext_combo.currentTextChanged.connect(self._on_settings_changed)
         dir_layout.addRow("File Extension:", self.file_ext_combo)
 
-        # File name filter input
+        # File name filter input and Load preview button (same row)
         self.measure_type_edit = QLineEdit()
         self.measure_type_edit.setPlaceholderText(
             "Files containing this substring will be selected"
         )
-        self.measure_type_edit.textChanged.connect(self._on_settings_changed)
-        dir_layout.addRow("File Name Filter:", self.measure_type_edit)
+        self.load_preview_btn = QPushButton("Load preview")
+        self.load_preview_btn.clicked.connect(self._on_load_preview_clicked)
+        self.load_preview_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                border: none;
+                padding: 5px 15px;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #218838;
+            }
+            QPushButton:pressed {
+                background-color: #1e7e34;
+            }
+            """
+        )
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(self.measure_type_edit, 1)
+        filter_row.addWidget(self.load_preview_btn, 0)
+        dir_layout.addRow("Filter by (filename):", filter_row)
 
         dir_group.setLayout(dir_layout)
         layout.addWidget(dir_group)
 
         # Validation status
-        self.validation_progress = QProgressBar()
-        self.validation_progress.setVisible(False)
-        self.validation_progress.setRange(0, 0)  # Indeterminate
-        layout.addWidget(self.validation_progress)
-
         self.validation_label = QLabel("")
         self.validation_label.setWordWrap(True)
         layout.addWidget(self.validation_label)
@@ -256,12 +202,91 @@ class ContextualDataPage(QWizardPage):
 
     def _on_directory_selected(self, dir_path: str):
         """Handle directory selection."""
-        self._validate_directory()
+        self.validation_label.setText("Directory set; click Load preview to validate.")
 
-    def _on_settings_changed(self):
-        """Handle settings changes (file extension or measure type)."""
-        if self.dir_picker.get_path():
-            self._validate_directory()
+    def _on_load_preview_clicked(self):
+        """Validate directory and load preview synchronously."""
+        dir_path = self.dir_picker.get_path()
+        if not dir_path:
+            self.validation_label.setText("Select a directory first.")
+            return
+
+        measure_type = self.measure_type_edit.text().strip() or None
+        file_ext_text = self.file_ext_combo.currentText()
+        file_extension = None if file_ext_text == "Auto-detect" else file_ext_text
+
+        self.validation_label.setText("Loading...")
+        QApplication.processEvents()
+
+        try:
+            is_valid, years, error_msg = validate_contextual_directory(
+                dir_path, measure_type, file_extension
+            )
+            if not is_valid:
+                self._clear_preview_state()
+                self.validation_label.setText(f"✗ {error_msg}")
+                self.completeChanged.emit()
+                return
+
+            dirpath = Path(dir_path)
+            if file_extension is None:
+                supported_extensions = [
+                    ".csv",
+                    ".dta",
+                    ".parquet",
+                    ".pq",
+                    ".feather",
+                    ".xlsx",
+                    ".xls",
+                ]
+            else:
+                supported_extensions = [file_extension]
+
+            all_files = []
+            for ext in supported_extensions:
+                all_files.extend(dirpath.glob(f"*{ext}"))
+
+            if measure_type is not None:
+                file_paths = [f for f in all_files if measure_type in f.name]
+            else:
+                file_paths = all_files
+
+            if not file_paths:
+                self._clear_preview_state()
+                self.validation_label.setText(
+                    "✗ No matching files found for the given directory and filter."
+                )
+                self.completeChanged.emit()
+                return
+
+            is_valid, error_msg = check_column_consistency(file_paths)
+            if not is_valid:
+                self._clear_preview_state()
+                self.validation_label.setText(f"✗ {error_msg}")
+                self.completeChanged.emit()
+                return
+
+            self.validation_label.setText(
+                f"✓ Found {len(file_paths)} valid files for years: {', '.join(years)}"
+            )
+            self.file_paths = file_paths
+            self._load_preview(file_paths[0])
+
+        except Exception as e:
+            self._clear_preview_state()
+            self.validation_label.setText(f"✗ Validation error: {str(e)}")
+
+        self.completeChanged.emit()
+
+    def _clear_preview_state(self):
+        """Clear preview table and column selection state."""
+        self.preview_table.set_dataframe(None)
+        self.data_col_source_combo.clear()
+        self.data_col_list.clear()
+        self.data_col_hidden.clear()
+        self.geoid_col_combo.clear()
+        self.date_col_combo.clear()
+        self.file_paths = []
 
     def _on_add_data_column(self):
         """Add selected column to the data columns list."""
@@ -297,55 +322,6 @@ class ContextualDataPage(QWizardPage):
         for i in range(self.data_col_list.count()):
             columns.append(self.data_col_list.item(i).text())
         self.data_col_hidden.setText(",".join(columns))
-
-    def _validate_directory(self):
-        """Validate the selected directory in a background thread."""
-        dir_path = self.dir_picker.get_path()
-        if not dir_path:
-            return
-
-        measure_type = self.measure_type_edit.text().strip() or None
-
-        file_ext_text = self.file_ext_combo.currentText()
-        file_extension = None if file_ext_text == "Auto-detect" else file_ext_text
-
-        # Show progress
-        self.validation_progress.setVisible(True)
-        self.validation_label.setText(
-            "Validating directory and checking file consistency..."
-        )
-
-        # Start validation thread
-        self.validation_thread = ValidationThread(
-            dir_path, measure_type, file_extension
-        )
-        self.validation_thread.finished.connect(self._on_validation_finished)
-        self.validation_thread.start()
-
-    def _on_validation_finished(
-        self, success: bool, message: str, years: list, file_paths: list
-    ):
-        """Handle validation completion."""
-        self.validation_progress.setVisible(False)
-
-        if success:
-            self.validation_label.setText(f"✓ {message}")
-            self.file_paths = file_paths
-
-            # Load preview of first file
-            if file_paths:
-                self._load_preview(file_paths[0])
-        else:
-            self.validation_label.setText(f"✗ {message}")
-            self.preview_table.set_dataframe(None)
-            self.data_col_source_combo.clear()
-            self.data_col_list.clear()
-            self.data_col_hidden.clear()
-            self.geoid_col_combo.clear()
-            self.date_col_combo.clear()
-            self.file_paths = []
-
-        self.completeChanged.emit()
 
     def _load_preview(self, file_path: Path):
         """Load preview of a data file."""
