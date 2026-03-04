@@ -176,9 +176,9 @@ def survey_data_2016_2020(tmp_path, real_geoid_pool):
             {
                 "hhidpn": hhidpn,
                 "iwdate": iwdate,  # Use iwdate to match step1 script
-                "LINKCEN2010_2010": geoid_2010,
-                "LINKCEN2010_2015": geoid_2015,
-                "LINKCEN2010_2020": geoid_2020,
+                "GEOID2010_2010": geoid_2010,
+                "GEOID2010_2015": geoid_2015,
+                "GEOID2010_2020": geoid_2020,
                 "age": np.random.randint(50, 90),
                 "gender": np.random.choice(["Male", "Female"]),
             }

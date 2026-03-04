@@ -108,7 +108,7 @@ def survey_data_multicolumn(tmp_path, real_geoid_pool):
             {
                 "hhidpn": hhidpn,
                 "iwdate": iwdate,
-                "LINKCEN2010": geoid,
+                "GEOID2010": geoid,
                 "age": np.random.randint(50, 90),
                 "gender": np.random.choice(["Male", "Female"]),
             }

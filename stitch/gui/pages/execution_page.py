@@ -86,7 +86,7 @@ class PipelineRunner(QThread):
             sys.stderr = OutputRedirector(self.output.emit)
 
             self.output.emit("Starting pipeline execution...")
-            self.output.emit(f"HRS data: {self.args.hrs_data}")
+            self.output.emit(f"HRS data: {self.args.survey_data}")
             self.output.emit(f"Context directory: {self.args.context_dir}")
             self.output.emit(f"Output: {self.args.save_dir}/{self.args.output_name}")
             self.output.emit(f"Number of lags: {self.args.n_lags}")
@@ -186,7 +186,7 @@ class ExecutionPage(QWizardPage):
 
         # Build arguments namespace
         args = argparse.Namespace(
-            hrs_data=wizard.field("hrs_data_path"),
+            survey_data=wizard.field("hrs_data_path"),
             context_dir=wizard.field("context_dir"),
             output_name=wizard.field("output_name"),
             id_col=wizard.field("id_col"),

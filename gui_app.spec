@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller specification file for HRS Linkage Tool GUI.
+PyInstaller specification file for STITCH Linkage Tool GUI.
 
 This spec file configures the build of a standalone executable for the
 PyQt6-based GUI application.

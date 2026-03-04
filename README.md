@@ -57,7 +57,7 @@ uv run python gui_app.py
 ```
 
 The GUI provides a step-by-step wizard for:
-1. Selecting HRS survey data with dropdown selection for ID column, date column, and GEOID column
+1. Selecting STITCH survey data with dropdown selection for ID column, date column, and GEOID column
 2. Configuring optional residential history with dynamic dropdown population from data
 3. Selecting and validating contextual data directories with file name filtering and column selection
 4. Setting pipeline parameters (number of lags, parallel processing)
@@ -71,12 +71,12 @@ For automation and scripting:
 
 ```bash
 python stitch_cli.py \
-    --hrs-data "path/to/HRSprep2016full.dta" \
+    --survey-data "path/to/surveyprep2016full.dta" \
     --context-dir "path/to/daily_heat_long" \
-    --output_name "HRSHeatLinked.dta" \
+    --output_name "surveyHeatLinked.dta" \
     --id-col hhidpn \
     --date-col iwdate \
-    --geoid-col LINKCEN2010 \
+    --geoid-col GEOID2010 \
     --measure-type heat_index \
     --data-col HeatIndex \
     --contextual-geoid-col GEOID10 \
@@ -89,21 +89,21 @@ python stitch_cli.py \
 
 ```bash
 python stitch_cli.py \
-    --hrs-data "path/to/HRSprep2016full.dta" \
+    --survey-data "path/to/surveyprep2016full.dta" \
     --residential-hist "path/to/residential_history.dta" \
     --res-hist-hhidpn hhidpn \
     --res-hist-movecol trmove_tr \
     --res-hist-mvyear mvyear \
     --res-hist-mvmonth mvmonth \
     --res-hist-moved-mark "1. move" \
-    --res-hist-geoid LINKCEN2010 \
+    --res-hist-geoid GEOID2010 \
     --res-hist-survey-yr-col year \
     --res-hist-first-tract-mark 999.0 \
     --context-dir "path/to/daily_heat_long" \
-    --output_name "HRSHeatLinked.dta" \
+    --output_name "surveyHeatLinked.dta" \
     --id-col hhidpn \
     --date-col iwdate \
-    --geoid-col LINKCEN2010 \
+    --geoid-col GEOID2010 \
     --measure-type heat_index \
     --data-col HeatIndex \
     --contextual-geoid-col GEOID10 \
@@ -116,7 +116,7 @@ python stitch_cli.py \
 
 ### Required Arguments
 
-- `--hrs-data`: Path to HRS survey data file (.dta)
+- `--survey-data`: Path to survey survey data file (.dta)
 - `--context-dir`: Directory containing daily contextual data files
 - `--id-col`: Unique identifier column name (e.g., hhidpn)
 - `--date-col`: Interview/collection date column name
@@ -127,7 +127,7 @@ python stitch_cli.py \
 
 - `--output_name`: Output filename (default: linked_data.dta)
 - `--data-col`: Explicit data column name (overrides measure type inference)
-- `--geoid-col`: GEOID column name in HRS data (default: LINKCEN2010)
+- `--geoid-col`: GEOID column name in survey data (default: GEOID2010)
 - `--contextual-geoid-col`: GEOID column name in contextual data files (default: GEOID10)
 - `--file-extension`: File extension to search for (e.g., .csv, .parquet)
 - `--n-lags`: Number of lag days to compute (default: 365)
@@ -151,7 +151,7 @@ python stitch_cli.py \
 ```
 stitch/
 ├── stitch/
-│   ├── hrs.py                 # HRS data handling classes
+│   ├── hrs.py                 # survey data handling classes
 │   ├── daily_measure.py       # Contextual data loading
 │   ├── process.py             # Parallel/batch processing
 │   ├── io_utils.py            # File I/O utilities
@@ -177,7 +177,7 @@ Parses residential move history and enables date-based GEOID lookup accounting f
 Directory-level wrapper that lazy-loads yearly contextual data files with validation.
 
 ### `HRSContextLinker`
-Handles temporal/geographic alignment between HRS and contextual data, including n-day prior date calculation and GEOID assignment.
+Handles temporal/geographic alignment between survey and contextual data, including n-day prior date calculation and GEOID assignment.
 
 ## Examples
 
@@ -185,13 +185,13 @@ Handles temporal/geographic alignment between HRS and contextual data, including
 
 ```bash
 python stitch_cli.py \
-    --hrs-data "data/HRS2016.dta" \
+    --survey-data "data/survey2016.dta" \
     --context-dir "data/heat_index" \
     --measure-type heat_index \
     --data-col HeatIndex \
     --id-col hhidpn \
     --date-col iwdate \
-    --geoid-col LINKCEN2010 \
+    --geoid-col GEOID2010 \
     --contextual-geoid-col GEOID10 \
     --n-lags 365 \
     --save-dir "output/heat" \
@@ -202,13 +202,13 @@ python stitch_cli.py \
 
 ```bash
 python stitch_cli.py \
-    --hrs-data "data/HRS2016.dta" \
+    --survey-data "data/survey2016.dta" \
     --residential-hist "data/residential_moves.dta" \
     --context-dir "data/pm25" \
     --measure-type pm25 \
     --id-col hhidpn \
     --date-col iwdate \
-    --geoid-col LINKCEN2010 \
+    --geoid-col GEOID2010 \
     --contextual-geoid-col GEOID10 \
     --n-lags 730 \
     --save-dir "output/pm25" \
@@ -223,8 +223,8 @@ python stitch_cli.py \
 
 ## Data Requirements
 
-### HRS Survey Data
-- Format: Stata (.dta) file
+### Survey/Interview Data
+- Format: Stata (.dta), CSV, Parquet, Feather, or Excel file
 - Required columns:
   - Unique participant ID (selectable via dropdown in GUI or `--id-col` in CLI)
   - Date column (interview/collection date, selectable via `--date-col`)
@@ -240,7 +240,7 @@ python stitch_cli.py \
 - File filtering: Use `--measure-type` to select files containing specific substrings
 
 ### Residential History (Optional)
-- Format: Stata (.dta) file
+- Format: Stata (.dta), CSV, Parquet, Feather, or Excel file
 - Required columns:
   - Participant ID
   - Move indicator

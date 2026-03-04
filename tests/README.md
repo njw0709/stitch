@@ -37,7 +37,7 @@ Each person has multiple rows representing their residential history:
 | `trmove_tr` | Move indicator | 999.0 (first tract), "1. move" (moves) |
 | `mvyear` | Move year | 2012, 2015, 2018 (empty for first tract) |
 | `mvmonth` | Move month | 1-12 (empty for first tract) |
-| `LINKCEN2010` | Census tract GEOID | 11-digit zero-padded string |
+| `GEOID2010` | Census tract GEOID | 11-digit zero-padded string |
 | `year` | Survey year | 2010 (empty for moves) |
 
 ### Survey Data
@@ -47,9 +47,9 @@ Each person has one row with interview information:
 |--------|-------------|----------------|
 | `hhidpn` | Person ID | 10000001, 10000002, ... |
 | `bcdate` | Interview date | "2017-03-15", "2018-08-20" |
-| `LINKCEN2010_2010` | Static GEOID for 2010 | 11-digit zero-padded string |
-| `LINKCEN2010_2015` | Static GEOID for 2015 | 11-digit zero-padded string |
-| `LINKCEN2010_2020` | Static GEOID for 2020 | 11-digit zero-padded string |
+| `GEOID2010_2010` | Static GEOID for 2010 | 11-digit zero-padded string |
+| `GEOID2010_2015` | Static GEOID for 2015 | 11-digit zero-padded string |
+| `GEOID2010_2020` | Static GEOID for 2020 | 11-digit zero-padded string |
 | `age` | Age at interview | 50-89 |
 | `gender` | Gender | "Male", "Female" |
 | `education` | Education level | "Less than HS", "HS", "Some College", "College+" |

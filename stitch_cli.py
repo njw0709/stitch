@@ -1,23 +1,23 @@
 #!/usr/bin/env python
 """
-Lagged contextual data linkage for HRS datasets.
+Lagged contextual data linkage for Survey datasets.
 
 This script links daily contextual datasets (e.g., heat index, PM2.5)
-to HRS interview/epigenetic data by computing n-day prior dates and GEOIDs,
+to Survey interview/epigenetic data by computing n-day prior dates and GEOIDs,
 then merging for each lag day. Supports both parallel and sequential processing.
 
 Example:
 --------
 python stitch_cli.py \
-    --hrs-data "C:/path/to/HRSprep2016full.dta" \
+    --survey-data "C:/path/to/Surveyprep2016full.dta" \
     --context-dir "C:/path/to/daily_heat_long" \
-    --output "C:/path/to/output/HRSHeatLinked.dta" \
+    --output "C:/path/to/output/SurveyHeatLinked.dta" \
     --id-col hhidpn \
     --date-col iwdate \
     --measure-type heat_index \
     --data-col HeatIndex \
     --n-lags 2191 \
-    --geoid-col LINKCEN2010 \
+    --geoid-col GEOID2010 \
     --contextual-geoid-col GEOID10 \
     --file-extension .parquet \
     --parallel
@@ -25,24 +25,24 @@ python stitch_cli.py \
 With residential history:
 -------------------------
 python stitch_cli.py \
-    --hrs-data "C:/path/to/HRSprep2016full.dta" \
+    --survey-data "C:/path/to/Surveyprep2016full.dta" \
     --residential-hist "C:/path/to/residential_history.dta" \
     --res-hist-hhidpn hhidpn \
     --res-hist-movecol trmove_tr \
     --res-hist-mvyear mvyear \
     --res-hist-mvmonth mvmonth \
     --res-hist-moved-mark "1. move" \
-    --res-hist-geoid LINKCEN2010 \
+    --res-hist-geoid GEOID2010 \
     --res-hist-survey-yr-col year \
     --res-hist-first-tract-mark 999.0 \
     --context-dir "C:/path/to/daily_heat_long" \
-    --output "C:/path/to/output/HRSHeatLinked.dta" \
+    --output "C:/path/to/output/SurveyHeatLinked.dta" \
     --id-col hhidpn \
     --date-col iwdate \
     --measure-type heat_index \
     --data-col HeatIndex \
     --n-lags 2191 \
-    --geoid-col LINKCEN2010 \
+    --geoid-col GEOID2010 \
     --contextual-geoid-col GEOID10 \
     --file-extension .parquet \
     --parallel
@@ -56,9 +56,11 @@ from stitch.process import run_pipeline
 def _create_parser() -> argparse.ArgumentParser:
     """Create and configure the argument parser."""
     parser = argparse.ArgumentParser(
-        description="Link daily contextual data to HRS dataset with n-day lags."
+        description="Link daily contextual data to Survey dataset with n-day lags."
     )
-    parser.add_argument("--hrs-data", required=True, help="Path to HRS Stata file")
+    parser.add_argument(
+        "--survey-data", required=True, help="Path to Survey Stata file"
+    )
     parser.add_argument(
         "--context-dir",
         required=True,
@@ -95,8 +97,8 @@ def _create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--geoid-col",
-        default="LINKCEN2010",
-        help="GEOID column name in HRS data (default: LINKCEN2010)",
+        default="GEOID2010",
+        help="GEOID column name in Survey data (default: GEOID2010)",
     )
     parser.add_argument(
         "--contextual-geoid-col",
@@ -139,8 +141,8 @@ def _create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--res-hist-geoid",
-        default="LINKCEN2010",
-        help="GEOID column name in residential history (default: LINKCEN2010)",
+        default="GEOID2010",
+        help="GEOID column name in residential history (default: GEOID2010)",
     )
     parser.add_argument(
         "--res-hist-survey-yr-col",

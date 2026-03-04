@@ -159,8 +159,8 @@ class HRSDataPage(QWizardPage):
         # Populate geoid column dropdown
         self.geoid_col_combo.clear()
         self.geoid_col_combo.addItems(columns)
-        # Try to find and set default to a column containing "LINKCEN" or "GEOID"
-        for possible_geoid in ["LINKCEN2010", "GEOID", "geoid"]:
+        # Try to find and set default to a column containing "GEOID" or "GEOID"
+        for possible_geoid in ["GEOID2010", "GEOID", "geoid"]:
             geoid_index = self.geoid_col_combo.findText(possible_geoid)
             if geoid_index >= 0:
                 self.geoid_col_combo.setCurrentIndex(geoid_index)

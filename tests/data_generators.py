@@ -117,7 +117,7 @@ def create_residential_history_data(
                 "trmove_tr": "999.0",  # First tract marker as string
                 "mvyear": np.nan,  # No move year for first tract
                 "mvmonth": np.nan,  # No move month for first tract
-                "LINKCEN2010": first_geoid,
+                "GEOID2010": first_geoid,
                 "year": 2010,
             }
         )
@@ -136,7 +136,7 @@ def create_residential_history_data(
                     "trmove_tr": "1. move",
                     "mvyear": move_year,
                     "mvmonth": move_month,
-                    "LINKCEN2010": move_geoid,
+                    "GEOID2010": move_geoid,
                     "year": np.nan,  # Not applicable for moves
                 }
             )
@@ -182,9 +182,9 @@ def create_survey_data(n_people: int = 55, geoid_pool: List[str] = None) -> List
             {
                 "hhidpn": hhidpn,
                 "bcdate": bcdate,
-                "LINKCEN2010_2010": geoid_2010,
-                "LINKCEN2010_2015": geoid_2015,
-                "LINKCEN2010_2020": geoid_2020,
+                "GEOID2010_2010": geoid_2010,
+                "GEOID2010_2015": geoid_2015,
+                "GEOID2010_2020": geoid_2020,
                 # Add some additional survey variables
                 "age": np.random.randint(50, 90),
                 "gender": np.random.choice(["Male", "Female"]),

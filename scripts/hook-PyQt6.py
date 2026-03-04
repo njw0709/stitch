@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Configure error logging for all platforms
 log_file = Path.home() / ".stitch.log"
-os.environ["HRS_LINKAGE_LOG_FILE"] = str(log_file)
+os.environ["STITCH_LOG_FILE"] = str(log_file)
 
 # Platform-specific initialization
 if sys.platform == "darwin":

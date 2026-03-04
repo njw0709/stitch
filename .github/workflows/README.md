@@ -16,12 +16,12 @@ Automated multi-platform build and release workflow.
 1. **build-macos-arm**: Build macOS ARM application
    - Runs on `macos-latest` (Apple Silicon)
    - Uses PyInstaller to create `.app` bundle
-   - Creates ZIP archive using `ditto` (preserves macOS attributes): `HRSLinkageTool-macOS-ARM.zip`
+   - Creates ZIP archive using `ditto` (preserves macOS attributes): `STITCH-macOS-ARM.zip`
 
 2. **build-windows**: Build Windows application
    - Runs on `windows-latest`
    - Uses PyInstaller to create `.exe` application
-   - Creates ZIP archive: `HRSLinkageTool-Windows.zip`
+   - Creates ZIP archive: `STITCH-Windows.zip`
 
 3. **create-release**: Create GitHub Release
    - Depends on successful macOS and Windows builds
@@ -50,8 +50,8 @@ permissions:
 
 For each release, the workflow produces:
 - **GitHub Release** with version tag and release notes
-- **macOS ARM Build**: `HRSLinkageTool-macOS-ARM.zip` containing `.app` bundle
-- **Windows Build**: `HRSLinkageTool-Windows.zip` containing `.exe` and dependencies
+- **macOS ARM Build**: `STITCH-macOS-ARM.zip` containing `.app` bundle
+- **Windows Build**: `STITCH-Windows.zip` containing `.exe` and dependencies
 
 ### Example Usage
 

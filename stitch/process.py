@@ -85,7 +85,7 @@ def compute_required_years(
 
 def extract_unique_geoids(
     hrs_data_with_lags: pd.DataFrame,
-    geoid_col: str = "LINKCEN2010",
+    geoid_col: str = "GEOID2010",
 ) -> set:
     """
     Extract all unique GEOIDs from n-day-prior GEOID columns in the DataFrame.
@@ -99,7 +99,7 @@ def extract_unique_geoids(
     hrs_data_with_lags : pd.DataFrame
         DataFrame containing GEOID columns (typically output from
         HRSContextLinker.prepare_lag_columns_batch).
-    geoid_col : str, default "LINKCEN2010"
+    geoid_col : str, default "GEOID2010"
         Name of the GEOID column used to identify GEOID-related columns.
 
     Returns
@@ -112,7 +112,7 @@ def extract_unique_geoids(
     >>> hrs_with_lags = HRSContextLinker.prepare_lag_columns_batch(
     ...     hrs_data, n_days=[0, 7, 30]
     ... )
-    >>> unique_geoids = extract_unique_geoids(hrs_with_lags, "LINKCEN2010")
+    >>> unique_geoids = extract_unique_geoids(hrs_with_lags, "GEOID2010")
     >>> print(f"Need data for {len(unique_geoids)} unique GEOIDs")
     """
     geoid_cols = [c for c in hrs_data_with_lags.columns if geoid_col in c]
@@ -654,7 +654,7 @@ def run_pipeline(args: argparse.Namespace):
     ----------
     args : argparse.Namespace
         Arguments containing all pipeline configuration:
-        - hrs_data: Path to HRS Stata file
+        - survey_data: Path to HRS/survey Stata file
         - context_dir: Directory containing contextual data files
         - output_name: Output file name
         - save_dir: Directory to save output and temp files
@@ -671,7 +671,7 @@ def run_pipeline(args: argparse.Namespace):
         - residential_hist: Path to residential history file (optional)
         - res_hist_*: Residential history configuration parameters
     """
-    hrs_path = Path(args.hrs_data)
+    hrs_path = Path(args.survey_data)
     context_dir = Path(args.context_dir)
     out_path = Path(args.save_dir) / Path(args.output_name)
 

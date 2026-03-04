@@ -42,7 +42,7 @@ def test_survey_data_integration(survey_data_hrs):
     assert dates.max() <= pd.Timestamp("2020-12-31")
 
     # Test GEOID formatting
-    geoid_cols = [c for c in survey_data_hrs.df.columns if "LINKCEN" in c]
+    geoid_cols = [c for c in survey_data_hrs.df.columns if "GEOID" in c]
     for col in geoid_cols:
         geoid_lengths = survey_data_hrs.df[col].astype(str).str.len()
         assert geoid_lengths.eq(11).all()
@@ -93,7 +93,7 @@ def test_hrs_context_linker_geoid_assignment(survey_with_residential_history):
         survey_with_residential_history, colname
     )
 
-    assert geoid_colname == "LINKCEN2010_14day_prior"
+    assert geoid_colname == "GEOID2010_14day_prior"
     assert geoid_colname in survey_with_residential_history.df.columns
 
     # Test that GEOIDs are properly formatted
