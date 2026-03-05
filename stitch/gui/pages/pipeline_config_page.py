@@ -58,32 +58,25 @@ class PipelineConfigPage(QWizardPage):
 
         layout = QVBoxLayout()
 
-        # --- General settings group ---
-        general_group = QGroupBox("General Settings")
-        general_layout = QFormLayout()
+        # --- Execution options group ---
+        exec_group = QGroupBox("Execution Options")
+        exec_layout = QFormLayout()
 
         self.n_lags_spin = QSpinBox()
         self.n_lags_spin.setMinimum(1)
         self.n_lags_spin.setMaximum(10000)
         self.n_lags_spin.setValue(365)
         self.n_lags_spin.setSingleStep(1)
-        general_layout.addRow("Number of Lags:", self.n_lags_spin)
-
-        general_group.setLayout(general_layout)
-        layout.addWidget(general_group)
-
-        # --- Execution options group ---
-        exec_group = QGroupBox("Execution Options")
-        exec_layout = QVBoxLayout()
+        exec_layout.addRow("Number of Lags:", self.n_lags_spin)
 
         self.parallel_checkbox = QCheckBox(
             "Use parallel processing (faster for large datasets)"
         )
         self.parallel_checkbox.setChecked(True)
-        exec_layout.addWidget(self.parallel_checkbox)
+        exec_layout.addRow("", self.parallel_checkbox)
 
         self.include_lag_date_checkbox = QCheckBox("Include lag date columns in output")
-        exec_layout.addWidget(self.include_lag_date_checkbox)
+        exec_layout.addRow("", self.include_lag_date_checkbox)
 
         exec_group.setLayout(exec_layout)
         layout.addWidget(exec_group)
@@ -92,13 +85,15 @@ class PipelineConfigPage(QWizardPage):
         geoid_group = QGroupBox("GEOID Normalization")
         geoid_layout = QVBoxLayout()
 
-        # Raw sample labels (populated in initializePage)
-        self.raw_samples_label = QLabel("Raw GEOID samples will appear here.")
-        self.raw_samples_label.setWordWrap(True)
-        self.raw_samples_label.setStyleSheet(
-            "font-family: monospace; background: palette(base); padding: 6px;"
+        # Preview window: shows raw read-in formats by default; shows normalization on Preview click
+        self.preview_result_text = QTextEdit()
+        self.preview_result_text.setReadOnly(True)
+        self.preview_result_text.setFontFamily("Monospace")
+        self.preview_result_text.setMaximumHeight(120)
+        self.preview_result_text.setPlaceholderText(
+            "Raw GEOID samples from data sources. Click Preview to see normalization result."
         )
-        geoid_layout.addWidget(self.raw_samples_label)
+        geoid_layout.addWidget(self.preview_result_text)
 
         # Treatment selection
         treatment_form = QFormLayout()
@@ -171,16 +166,6 @@ class PipelineConfigPage(QWizardPage):
         self.numeric_options_widget.setVisible(False)
         geoid_layout.addWidget(self.numeric_options_widget)
 
-        # Preview result (always visible, read-only text area)
-        self.preview_result_text = QTextEdit()
-        self.preview_result_text.setReadOnly(True)
-        self.preview_result_text.setFontFamily("Monospace")
-        self.preview_result_text.setMaximumHeight(120)
-        self.preview_result_text.setPlaceholderText(
-            "Click Preview to see how GEOIDs will be normalized."
-        )
-        geoid_layout.addWidget(self.preview_result_text)
-
         geoid_group.setLayout(geoid_layout)
         layout.addWidget(geoid_group)
 
@@ -202,10 +187,17 @@ class PipelineConfigPage(QWizardPage):
         output_layout = QFormLayout()
 
         self.save_dir_picker = DirectoryPicker()
-        output_layout.addRow("Save Directory:", self.save_dir_picker)
+        self.save_dir_picker.browse_btn.setStyleSheet(GREEN_BUTTON_STYLE)
 
         self.output_name_edit = QLineEdit("linked_data.dta")
-        output_layout.addRow("Output Filename:", self.output_name_edit)
+
+        output_row = QHBoxLayout()
+        output_row.addWidget(QLabel("Save Directory:"))
+        output_row.addWidget(self.save_dir_picker.path_edit, 1)
+        output_row.addWidget(self.save_dir_picker.browse_btn)
+        output_row.addWidget(QLabel("Output Filename:"))
+        output_row.addWidget(self.output_name_edit, 1)
+        output_layout.addRow("", output_row)
 
         output_group.setLayout(output_layout)
         layout.addWidget(output_group)
@@ -326,9 +318,9 @@ class PipelineConfigPage(QWizardPage):
             lines.append(f"Contextual ({ctx_geoid}): {samples or '(none)'}")
 
         if lines:
-            self.raw_samples_label.setText("\n".join(lines))
+            self.preview_result_text.setPlainText("\n".join(lines))
         else:
-            self.raw_samples_label.setText("No GEOID samples available.")
+            self.preview_result_text.setPlainText("No GEOID samples available.")
 
         # Auto-detect max digit length for the spinbox default
         self._auto_detect_n_digits()

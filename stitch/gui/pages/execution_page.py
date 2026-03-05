@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QHBoxLayout,
     QMessageBox,
+    QWizard,
 )
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, QUrl
 from PyQt6.QtGui import QDesktopServices
@@ -85,7 +86,9 @@ class PipelineWorker(QObject):
                 self.output.emit("Starting pipeline execution...")
                 self.output.emit(f"HRS data: {self.args.survey_data}")
                 self.output.emit(f"Context directory: {self.args.context_dir}")
-                self.output.emit(f"Output: {self.args.save_dir}/{self.args.output_name}")
+                self.output.emit(
+                    f"Output: {self.args.save_dir}/{self.args.output_name}"
+                )
                 self.output.emit(f"Number of lags: {self.args.n_lags}")
                 self.output.emit(
                     f"Processing mode: {'Parallel' if self.args.parallel else 'Batch'}"
@@ -231,11 +234,6 @@ class ExecutionPage(QWizardPage):
     def _run_pipeline(self):
         """Start the pipeline execution."""
         if self.pipeline_running:
-            QMessageBox.warning(
-                self,
-                "Pipeline Running",
-                "Pipeline is already running. Please wait for it to complete.",
-            )
             return
 
         # Build arguments
@@ -245,10 +243,11 @@ class ExecutionPage(QWizardPage):
         self.output_text.clear()
         self.output_text.append("=== Pipeline Configuration ===")
 
-        # Update UI
+        # Disable Run and Back while running
         self.pipeline_running = True
         self.pipeline_completed = False
         self.run_button.setEnabled(False)
+        self._set_back_button_enabled(False)
         self.progress_bar.setVisible(True)
         self.status_label.setText("Running pipeline...")
 
@@ -266,6 +265,12 @@ class ExecutionPage(QWizardPage):
 
         self.thread.start()
 
+    def _set_back_button_enabled(self, enabled: bool):
+        """Enable or disable the wizard Back button."""
+        wizard = self.wizard()
+        if wizard:
+            wizard.button(QWizard.WizardButton.BackButton).setEnabled(enabled)
+
     def _on_output(self, line: str):
         """Handle output from pipeline."""
         self.output_text.append(line)
@@ -280,6 +285,7 @@ class ExecutionPage(QWizardPage):
         self.pipeline_completed = success
 
         self.run_button.setEnabled(True)
+        self._set_back_button_enabled(True)
         self.progress_bar.setVisible(False)
         self.save_log_button.setEnabled(True)
 

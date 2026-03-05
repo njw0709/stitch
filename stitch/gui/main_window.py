@@ -2,7 +2,7 @@
 Main wizard window for the HRS Linkage Tool.
 """
 
-from PyQt6.QtWidgets import QWizard
+from PyQt6.QtWidgets import QWizard, QApplication
 from PyQt6.QtCore import Qt
 
 from .pages.hrs_data_page import HRSDataPage
@@ -48,6 +48,10 @@ class LinkageWizard(QWizard):
 
         # Set button text
         self.setButtonText(QWizard.WizardButton.FinishButton, "Close")
+        self.setButtonText(QWizard.WizardButton.CancelButton, "Quit")
+
+        # Quit closes the entire application
+        self.rejected.connect(QApplication.quit)
 
         # Apply styling
         self._apply_styles()
