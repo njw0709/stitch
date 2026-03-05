@@ -10,6 +10,7 @@ Usage:
     # or
     uv run python gui_app.py
 """
+import multiprocessing
 import sys
 import os
 import traceback
@@ -53,6 +54,7 @@ def log_error(error_msg, exception=None):
 
 def main():
     """Launch the STITCH Linkage Tool GUI."""
+    multiprocessing.freeze_support()
     try:
         app = QApplication(sys.argv)
 

@@ -2,7 +2,7 @@
 Main wizard window for the HRS Linkage Tool.
 """
 
-from PyQt6.QtWidgets import QWizard, QApplication
+from PyQt6.QtWidgets import QWizard, QApplication, QMessageBox
 from PyQt6.QtCore import Qt
 
 from .pages.hrs_data_page import HRSDataPage
@@ -95,3 +95,22 @@ class LinkageWizard(QWizard):
         }
         """
         self.setStyleSheet(style)
+
+    def closeEvent(self, event):
+        """Ensure worker thread is shut down before window closes."""
+        execution_page = self.page(self.PAGE_EXECUTION)
+        if execution_page and hasattr(execution_page, "stop_pipeline_thread"):
+            stopped = execution_page.stop_pipeline_thread()
+            if not stopped:
+                QMessageBox.warning(
+                    self,
+                    "Pipeline Still Running",
+                    (
+                        "The background pipeline is still shutting down. "
+                        "Please wait a moment and close again."
+                    ),
+                )
+                event.ignore()
+                return
+
+        super().closeEvent(event)

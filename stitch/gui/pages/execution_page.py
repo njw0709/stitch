@@ -261,6 +261,7 @@ class ExecutionPage(QWizardPage):
         self.worker.finished_signal.connect(self._on_finished)
         self.worker.finished_signal.connect(self.thread.quit)
         self.worker.finished_signal.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self._on_thread_finished)
         self.thread.finished.connect(self.thread.deleteLater)
 
         self.thread.start()
@@ -289,9 +290,6 @@ class ExecutionPage(QWizardPage):
         self.progress_bar.setVisible(False)
         self.save_log_button.setEnabled(True)
 
-        self.worker = None
-        self.thread = None
-
         if success:
             self.status_label.setText(f"✓ {message}")
             self.open_output_button.setEnabled(True)
@@ -301,6 +299,22 @@ class ExecutionPage(QWizardPage):
             QMessageBox.critical(self, "Error", message)
 
         self.completeChanged.emit()
+
+    def _on_thread_finished(self):
+        """Release thread/worker references only after Qt thread has stopped."""
+        self.worker = None
+        self.thread = None
+
+    def stop_pipeline_thread(self, wait_ms: int = 5000) -> bool:
+        """Request worker thread shutdown and wait for completion."""
+        thread = self.thread
+        if thread is None:
+            return True
+
+        if thread.isRunning():
+            thread.quit()
+            return thread.wait(wait_ms)
+        return True
 
     def _save_log(self):
         """Save the output log to a file."""

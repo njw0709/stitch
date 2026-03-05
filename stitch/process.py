@@ -313,10 +313,15 @@ def process_multiple_lags_parallel(
     auto_memory_limit: bool = True,
 ) -> List[Path]:
     """
-    Process multiple lags with parallel processing using ThreadPoolExecutor.
+    Process multiple lags with parallel processing using ProcessPoolExecutor.
 
-    Pre-computes all lag columns and filters contextual data once, then processes
-    lags in parallel threads that share the same memory space (avoiding serialization).
+    Pre-computes all lag columns and filters contextual data once, then
+    distributes lag processing across worker processes via a "spawn" context
+    to bypass the GIL and avoid fork-safety issues with Qt threads.
+
+    Large shared data (HRS data, pre-computed lag DataFrame, contextual
+    DataFrame) is passed to workers through the pool initializer so it is
+    serialized only once per worker rather than once per task.
 
     Parameters
     ----------
@@ -339,20 +344,22 @@ def process_multiple_lags_parallel(
     file_format : {"parquet", "feather", "csv"}, default "parquet"
         File format for temporary output files
     max_workers : int, optional
-        Maximum number of worker threads. If None and auto_memory_limit is True,
-        automatically calculates based on available memory. Otherwise uses default
-        from ThreadPoolExecutor.
+        Maximum number of worker processes. If None and auto_memory_limit is
+        True, automatically calculates based on available memory. Otherwise
+        uses the ProcessPoolExecutor default.
     auto_memory_limit : bool, default True
         If True and max_workers is None, automatically calculate max_workers
-        based on available system memory to prevent OOM errors. Assumes ~2GB
-        per worker thread as a conservative estimate.
+        based on available system memory to prevent OOM errors. Each worker
+        process receives its own copy of the shared data, so memory usage
+        scales with the number of workers.
 
     Returns
     -------
     List[Path]
         List of paths to temporary files created for each lag
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor, as_completed
     from .hrs import HRSContextLinker
     import os
 
@@ -389,7 +396,7 @@ def process_multiple_lags_parallel(
     contextual_df = pd.concat([contextual_dir[yr].df for yr in years_to_load], axis=0)
     print(f"  Contextual data shape: {contextual_df.shape}")
 
-    # Extract metadata once to avoid accessing contextual_dir in threads
+    # Extract metadata once to avoid accessing contextual_dir in workers
     first_year = years_to_load[0]
     first_context = contextual_dir[first_year]
     contextual_date_col = first_context.date_col
@@ -461,28 +468,31 @@ def process_multiple_lags_parallel(
             print("   Falling back to default max_workers")
             max_workers = None
 
-    # Step 4: Process lags in parallel using threads (shares memory)
+    # Step 4: Process lags in parallel using separate processes
     print(f"⚡ Processing {len(n_days)} lags in parallel...")
     temp_files = []
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
+    mp_context = multiprocessing.get_context("spawn")
+
+    with ProcessPoolExecutor(
+        max_workers=max_workers,
+        mp_context=mp_context,
+        initializer=_init_worker,
+        initargs=(
+            hrs_data, hrs_with_lags, contextual_df,
+            contextual_date_col, contextual_geoid_col, contextual_data_col,
+        ),
+    ) as executor:
         futures = {
             executor.submit(
-                _process_single_lag_internal,
+                _process_single_lag_worker,
                 n=n,
-                hrs_data=hrs_data,
                 id_col=id_col,
                 temp_dir=temp_dir,
                 prefix=prefix,
                 include_lag_date=include_lag_date,
                 file_format=file_format,
                 geoid_col=geoid_col,
-                precomputed_lag_df=hrs_with_lags,
-                preloaded_contextual_df=contextual_df,
-                contextual_date_col=contextual_date_col,
-                contextual_geoid_col=contextual_geoid_col,
-                contextual_data_col=contextual_data_col,
             ): n
             for n in n_days
         }
@@ -504,6 +514,40 @@ def process_multiple_lags_parallel(
 
     print(f"✅ Parallel processing complete! Generated {len(temp_files)} files\n")
     return temp_files
+
+
+_worker_shared: dict = {}
+
+
+def _init_worker(hrs_data, precomputed_lag_df, preloaded_contextual_df,
+                 contextual_date_col, contextual_geoid_col, contextual_data_col):
+    """Store shared read-only data in each worker process's global namespace."""
+    _worker_shared['hrs_data'] = hrs_data
+    _worker_shared['precomputed_lag_df'] = precomputed_lag_df
+    _worker_shared['preloaded_contextual_df'] = preloaded_contextual_df
+    _worker_shared['contextual_date_col'] = contextual_date_col
+    _worker_shared['contextual_geoid_col'] = contextual_geoid_col
+    _worker_shared['contextual_data_col'] = contextual_data_col
+
+
+def _process_single_lag_worker(n, id_col, temp_dir, prefix,
+                               include_lag_date, file_format, geoid_col):
+    """Thin wrapper that reads shared data from process globals."""
+    return _process_single_lag_internal(
+        n=n,
+        hrs_data=_worker_shared['hrs_data'],
+        id_col=id_col,
+        temp_dir=temp_dir,
+        prefix=prefix,
+        include_lag_date=include_lag_date,
+        file_format=file_format,
+        geoid_col=geoid_col,
+        precomputed_lag_df=_worker_shared['precomputed_lag_df'],
+        preloaded_contextual_df=_worker_shared['preloaded_contextual_df'],
+        contextual_date_col=_worker_shared['contextual_date_col'],
+        contextual_geoid_col=_worker_shared['contextual_geoid_col'],
+        contextual_data_col=_worker_shared['contextual_data_col'],
+    )
 
 
 def _process_single_lag_internal(

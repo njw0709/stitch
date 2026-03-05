@@ -197,6 +197,9 @@ def _create_parser() -> argparse.ArgumentParser:
 
 def main():
     """Entry point for script execution."""
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     parser = _create_parser()
     args = parser.parse_args()
     run_pipeline(args)
