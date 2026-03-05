@@ -705,6 +705,7 @@ def run_pipeline(args: argparse.Namespace):
         datecol=args.date_col,
         move=bool(residential_hist),
         residential_hist=residential_hist,
+        hhidpn=args.id_col,
         geoid_col=args.geoid_col,
     )
 
