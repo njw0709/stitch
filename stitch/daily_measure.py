@@ -226,23 +226,13 @@ class DailyMeasureData:
                 )
                 chunks = []
 
-                # Try pyarrow engine first (faster), fall back to default C engine
-                try:
-                    csv_reader = pd.read_csv(
-                        self.filepath,
-                        dtype=dtype_dict,
-                        usecols=usecols,
-                        chunksize=1_000_000,
-                        engine="pyarrow",
-                    )
-                except (ImportError, ValueError, TypeError):
-                    # pyarrow not available or doesn't support chunksize
-                    csv_reader = pd.read_csv(
-                        self.filepath,
-                        dtype=dtype_dict,
-                        usecols=usecols,
-                        chunksize=1_000_000,
-                    )
+                # pyarrow engine does not support chunksize; use the C engine
+                csv_reader = pd.read_csv(
+                    self.filepath,
+                    dtype=dtype_dict,
+                    usecols=usecols,
+                    chunksize=1_000_000,
+                )
 
                 total_before = 0
                 for chunk in csv_reader:

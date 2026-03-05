@@ -104,9 +104,15 @@ class ResidentialHistoryHRS:
             # Subsequent moves
             moved_rows = df_person[df_person[self.movecol] == self.moved_mark]
             for _, row in moved_rows.iterrows():
-                dt = pd.to_datetime(
-                    f"{int(row[self.mvyear])}-{int(row[self.mvmonth])}-01"
-                )
+                if pd.isna(row[self.mvyear]):
+                    mv_year = int(row[self.survey_yr_col])
+                else:
+                    mv_year = int(row[self.mvyear])
+                if pd.isna(row[self.mvmonth]):
+                    mv_month = 1
+                else:
+                    mv_month = int(row[self.mvmonth])
+                dt = pd.to_datetime(f"{mv_year}-{mv_month:02d}-01")
                 dates.append(dt)
                 geoids.append(normalize_geoid_value_for_processing(
                     row[self.geoid],
@@ -120,9 +126,16 @@ class ResidentialHistoryHRS:
         print("Residential history parsed! Debug: {}".format(debug))
         return move_info
 
-    def debug_move_info(self, move_info) -> dict:
+    def debug_move_info(self, move_info=None, n_samples: int = 5) -> dict:
         """
         Inspect _move_info contents for debugging.
+
+        Parameters
+        ----------
+        move_info : dict, optional
+            Move info dict to inspect. Defaults to self._move_info.
+        n_samples : int
+            Number of sample entries to include.
 
         Returns dict with:
         - key_count: number of keys in _move_info
@@ -130,13 +143,27 @@ class ResidentialHistoryHRS:
         - sample_keys: sample of keys
         - sample_entries: sample entries with dates/geoids
         """
+        if move_info is None:
+            move_info = self._move_info
 
         keys = list(move_info.keys())
         key_types = set(type(k).__name__ for k in keys)
 
+        sample_keys = keys[:n_samples]
+        sample_entries = {}
+        for k in sample_keys:
+            dates, geoids = move_info[k]
+            sample_entries[k] = {
+                "num_dates": len(dates),
+                "first_date": str(dates[0]) if dates else None,
+                "first_geoid": geoids[0] if geoids else None,
+            }
+
         return {
             "key_count": len(keys),
             "key_types": list(key_types),
+            "sample_keys": sample_keys,
+            "sample_entries": sample_entries,
         }
 
     @staticmethod

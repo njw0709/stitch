@@ -229,13 +229,3 @@ def test_parallel_processing_workflow(
     print("=" * 60)
 
 
-def test_batch_vs_parallel_consistency(
-    fake_residential_history_file, survey_data_2016_2020, heat_index_dir, tmp_path
-):
-    """
-    Test that batch and parallel processing produce identical results.
-
-    Note: Skipped by default to save time since both workflows are tested separately.
-    Run with pytest -k consistency to include this test.
-    """
-    pytest.skip("Skipping consistency test - both workflows tested separately")
