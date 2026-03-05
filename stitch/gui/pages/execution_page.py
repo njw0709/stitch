@@ -3,7 +3,8 @@ Pipeline execution page.
 """
 
 import argparse
-import sys
+import contextlib
+import io
 from pathlib import Path
 import re
 
@@ -17,7 +18,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QMessageBox,
 )
-from PyQt6.QtCore import QThread, pyqtSignal, QUrl
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, QUrl
 from PyQt6.QtGui import QDesktopServices
 
 from stitch.process import run_pipeline
@@ -50,63 +51,53 @@ def remove_emojis(text: str) -> str:
     return EMOJI_PATTERN.sub("", text)
 
 
-class OutputRedirector:
-    """Redirects stdout/stderr to Qt signal."""
+class EmittingStream(io.StringIO):
+    """Custom stream that emits signals on write."""
 
-    def __init__(self, emit_func):
-        self.emit_func = emit_func
+    def __init__(self, signal):
+        super().__init__()
+        self.signal = signal
 
     def write(self, text):
         if text.strip():
-            self.emit_func(text.rstrip())
+            self.signal.emit(text.rstrip())
 
     def flush(self):
         pass
 
 
-class PipelineRunner(QThread):
-    """Thread for running the pipeline function."""
+class PipelineWorker(QObject):
+    """Worker for running the pipeline in a separate thread."""
 
-    output = pyqtSignal(str)  # Emits output lines
-    finished_signal = pyqtSignal(bool, str)  # success, message
+    output = pyqtSignal(str)
+    finished_signal = pyqtSignal(bool, str)
 
     def __init__(self, args: argparse.Namespace):
         super().__init__()
         self.args = args
 
     def run(self):
-        """Run the pipeline function."""
-        # Save original stdout/stderr
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
+        """Execute the pipeline with localized stdout/stderr redirection."""
+        stream = EmittingStream(self.output)
 
         try:
-            # Redirect stdout and stderr to capture print statements
-            sys.stdout = OutputRedirector(self.output.emit)
-            sys.stderr = OutputRedirector(self.output.emit)
+            with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+                self.output.emit("Starting pipeline execution...")
+                self.output.emit(f"HRS data: {self.args.survey_data}")
+                self.output.emit(f"Context directory: {self.args.context_dir}")
+                self.output.emit(f"Output: {self.args.save_dir}/{self.args.output_name}")
+                self.output.emit(f"Number of lags: {self.args.n_lags}")
+                self.output.emit(
+                    f"Processing mode: {'Parallel' if self.args.parallel else 'Batch'}"
+                )
+                self.output.emit("")
 
-            self.output.emit("Starting pipeline execution...")
-            self.output.emit(f"HRS data: {self.args.survey_data}")
-            self.output.emit(f"Context directory: {self.args.context_dir}")
-            self.output.emit(f"Output: {self.args.save_dir}/{self.args.output_name}")
-            self.output.emit(f"Number of lags: {self.args.n_lags}")
-            self.output.emit(
-                f"Processing mode: {'Parallel' if self.args.parallel else 'Batch'}"
-            )
-            self.output.emit("")
-
-            # Call the pipeline function directly
-            run_pipeline(self.args)
+                run_pipeline(self.args)
 
             self.finished_signal.emit(True, "Pipeline completed successfully!")
 
         except Exception as e:
             self.finished_signal.emit(False, f"Error running pipeline: {str(e)}")
-
-        finally:
-            # Restore original stdout/stderr
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
 
 
 class ExecutionPage(QWizardPage):
@@ -119,7 +110,8 @@ class ExecutionPage(QWizardPage):
         self.setTitle("Run Pipeline")
         self.setSubTitle("Execute the linkage pipeline with your configured settings.")
 
-        self.runner_thread = None
+        self.thread = None
+        self.worker = None
         self.pipeline_running = False
         self.pipeline_completed = False
 
@@ -260,11 +252,19 @@ class ExecutionPage(QWizardPage):
         self.progress_bar.setVisible(True)
         self.status_label.setText("Running pipeline...")
 
-        # Start runner thread
-        self.runner_thread = PipelineRunner(args)
-        self.runner_thread.output.connect(self._on_output)
-        self.runner_thread.finished_signal.connect(self._on_finished)
-        self.runner_thread.start()
+        # Create thread and worker using moveToThread pattern
+        self.thread = QThread()
+        self.worker = PipelineWorker(args)
+        self.worker.moveToThread(self.thread)
+
+        self.thread.started.connect(self.worker.run)
+        self.worker.output.connect(self._on_output)
+        self.worker.finished_signal.connect(self._on_finished)
+        self.worker.finished_signal.connect(self.thread.quit)
+        self.worker.finished_signal.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+
+        self.thread.start()
 
     def _on_output(self, line: str):
         """Handle output from pipeline."""
@@ -282,6 +282,9 @@ class ExecutionPage(QWizardPage):
         self.run_button.setEnabled(True)
         self.progress_bar.setVisible(False)
         self.save_log_button.setEnabled(True)
+
+        self.worker = None
+        self.thread = None
 
         if success:
             self.status_label.setText(f"✓ {message}")
