@@ -7,34 +7,54 @@ from .hrs import (
     HRSContextLinker,
     HRSInterviewData,
     ResidentialHistoryHRS,
-    normalize_geoid_series,
 )
 from .daily_measure import DailyMeasureDataDir
-from .io_utils import write_data
+from .io_utils import (
+    apply_geoid_normalization,
+    normalize_geoid_for_processing,
+    write_data,
+)
 
 
-def convert_geoid_columns_to_string(
-    df: pd.DataFrame, geoid_cols: List[str]
+def convert_geoid_columns(
+    df: pd.DataFrame,
+    geoid_cols: List[str],
+    treatment: str = "code",
+    n_digits: int = 11,
+    numeric_type: str = "int",
+    final: bool = True,
 ) -> pd.DataFrame:
     """
-    Convert GEOID columns to zero-padded 11-digit strings.
+    Normalize GEOID columns according to the chosen treatment.
 
     Parameters
     ----------
     df : pd.DataFrame
-        DataFrame containing GEOID columns
+        DataFrame containing GEOID columns.
     geoid_cols : List[str]
-        List of GEOID column names to convert
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with GEOID columns converted to strings
+        GEOID column names to normalize.
+    treatment : str
+        ``"code"`` for zero-padded string, ``"numeric"`` for int/float.
+    n_digits : int
+        Target digit width (only used when *treatment* is ``"code"``).
+    numeric_type : str
+        ``"int"`` or ``"float"`` (only used when *treatment* is ``"numeric"``).
+    final : bool
+        If ``True`` (default), produce the final output format (numeric columns
+        stay numeric).  If ``False``, produce string representations suitable
+        for intermediate matching while still applying the chosen normalization
+        (e.g. numeric-first then stringified).
     """
     df = df.copy()
+    normalizer = apply_geoid_normalization if final else normalize_geoid_for_processing
     for col in geoid_cols:
         if col in df.columns:
-            df[col] = normalize_geoid_series(df[col])
+            df[col] = normalizer(
+                df[col],
+                treatment=treatment,
+                n_digits=n_digits,
+                numeric_type=numeric_type,
+            )
     return df
 
 
@@ -253,11 +273,18 @@ def process_multiple_lags_batch(
         if out_df.shape[1] <= 1:
             continue
 
-        # Convert GEOID columns to strings before saving
+        # Normalize GEOID columns (intermediate string form for later merging)
         if geoid_col is None:
             geoid_col = hrs_data.geoid_col
         temp_geoid_cols = [c for c in out_df.columns if geoid_col in c]
-        out_df = convert_geoid_columns_to_string(out_df, temp_geoid_cols)
+        out_df = convert_geoid_columns(
+            out_df,
+            temp_geoid_cols,
+            treatment=hrs_data.geoid_treatment,
+            n_digits=hrs_data.geoid_n_digits,
+            numeric_type=hrs_data.geoid_numeric_type,
+            final=False,
+        )
 
         # Save to temp file
         filename = f"{prefix}_lag_{n:04d}.{file_format}"
@@ -620,11 +647,18 @@ def _process_single_lag_internal(
         if out_df.shape[1] <= 1:
             return None
 
-        # Convert GEOID columns to strings before saving
+        # Normalize GEOID columns (intermediate string form for later merging)
         if geoid_col is None:
             geoid_col = hrs_data.geoid_col
         temp_geoid_cols = [c for c in out_df.columns if geoid_col in c]
-        out_df = convert_geoid_columns_to_string(out_df, temp_geoid_cols)
+        out_df = convert_geoid_columns(
+            out_df,
+            temp_geoid_cols,
+            treatment=hrs_data.geoid_treatment,
+            n_digits=hrs_data.geoid_n_digits,
+            numeric_type=hrs_data.geoid_numeric_type,
+            final=False,
+        )
 
         filename = f"{prefix}_lag_{n:04d}.{file_format}"
         temp_file = temp_dir / filename
@@ -681,6 +715,10 @@ def run_pipeline(args: argparse.Namespace):
         raise FileNotFoundError(f"Contextual data directory not found: {context_dir}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    geoid_n_digits = getattr(args, "geoid_n_digits", 11)
+    geoid_treatment = getattr(args, "geoid_treatment", "code")
+    geoid_numeric_type = getattr(args, "geoid_numeric_type", "int")
+
     # Load residential history (optional)
     if args.residential_hist:
         print("Loading residential history...")
@@ -694,6 +732,9 @@ def run_pipeline(args: argparse.Namespace):
             geoid=args.res_hist_geoid,
             survey_yr_col=args.res_hist_survey_yr_col,
             first_tract_mark=args.res_hist_first_tract_mark,
+            geoid_n_digits=geoid_n_digits,
+            geoid_treatment=geoid_treatment,
+            geoid_numeric_type=geoid_numeric_type,
         )
     else:
         residential_hist = None
@@ -707,6 +748,9 @@ def run_pipeline(args: argparse.Namespace):
         residential_hist=residential_hist,
         hhidpn=args.id_col,
         geoid_col=args.geoid_col,
+        geoid_n_digits=geoid_n_digits,
+        geoid_treatment=geoid_treatment,
+        geoid_numeric_type=geoid_numeric_type,
     )
 
     # Load contextual data
@@ -729,6 +773,9 @@ def run_pipeline(args: argparse.Namespace):
         geoid_col=contextual_geoid_col,
         date_col=context_date_col,
         file_extension=args.file_extension,
+        geoid_n_digits=geoid_n_digits,
+        geoid_treatment=geoid_treatment,
+        geoid_numeric_type=geoid_numeric_type,
     )
 
     # Process lags (parallel or batch)
@@ -828,7 +875,7 @@ def run_pipeline(args: argparse.Namespace):
         axis=1,
     )
 
-    # Convert GEOID columns to strings before saving
+    # Apply final GEOID normalization based on user config
     base_geoid = args.geoid_col
     geoid_cols = [
         c
@@ -836,7 +883,16 @@ def run_pipeline(args: argparse.Namespace):
         if c == base_geoid
         or (c.startswith(f"{base_geoid}_") and c.endswith("day_prior"))
     ]
-    final_df = convert_geoid_columns_to_string(final_df, geoid_cols)
+    geoid_treatment = getattr(args, "geoid_treatment", "code")
+    geoid_n_digits = getattr(args, "geoid_n_digits", 11)
+    geoid_numeric_type = getattr(args, "geoid_numeric_type", "int")
+    final_df = convert_geoid_columns(
+        final_df,
+        geoid_cols,
+        treatment=geoid_treatment,
+        n_digits=geoid_n_digits,
+        numeric_type=geoid_numeric_type,
+    )
 
     # Save final dataset (use centralized writer for dtype conversion/sanitation)
     print(f"Saving final dataset to {out_path}")

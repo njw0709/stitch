@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Union
 import pandas as pd
 import re
 
-from .io_utils import get_file_format, normalize_geoid_series, read_data
+from .io_utils import get_file_format, normalize_geoid_for_processing, read_data
 
 # Map file prefix to column name
 FILENAME_TO_VARNAME_DICT = {
@@ -36,6 +36,9 @@ class DailyMeasureData:
         date_col: str = "Date",
         rename_col: Optional[dict] = None,
         geoid_filter: Optional[set] = None,
+        geoid_n_digits: int = 11,
+        geoid_treatment: str = "code",
+        geoid_numeric_type: str = "int",
     ):
         """
         Initialize a DailyMeasureData object by reading and processing a single
@@ -126,6 +129,9 @@ class DailyMeasureData:
         self.expected_format = expected_format
         self.rename_col = rename_col
         self.geoid_filter = geoid_filter
+        self.geoid_n_digits = geoid_n_digits
+        self.geoid_treatment = geoid_treatment
+        self.geoid_numeric_type = geoid_numeric_type
 
         # Infer data_col from measure_type if not explicitly passed
         if data_col is None:
@@ -181,7 +187,12 @@ class DailyMeasureData:
             # --- 4. Format columns ---
             if df[self.date_col].dtype != "datetime64[ns]":
                 df[self.date_col] = pd.to_datetime(df[self.date_col], errors="coerce")
-            df[self.geoid_col] = normalize_geoid_series(df[self.geoid_col])
+            df[self.geoid_col] = normalize_geoid_for_processing(
+                df[self.geoid_col],
+                treatment=self.geoid_treatment,
+                n_digits=self.geoid_n_digits,
+                numeric_type=self.geoid_numeric_type,
+            )
 
             # --- 5. Filter by GEOID if provided ---
             if self.geoid_filter is not None:
@@ -237,7 +248,12 @@ class DailyMeasureData:
                 for chunk in csv_reader:
                     chunk = self._apply_rename(chunk)
                     # Format GEOID for filtering
-                    chunk[self.geoid_col] = normalize_geoid_series(chunk[self.geoid_col])
+                    chunk[self.geoid_col] = normalize_geoid_for_processing(
+                        chunk[self.geoid_col],
+                        treatment=self.geoid_treatment,
+                        n_digits=self.geoid_n_digits,
+                        numeric_type=self.geoid_numeric_type,
+                    )
                     # Filter immediately - discard unwanted data early
                     total_before += len(chunk)
                     filtered = chunk[chunk[self.geoid_col].isin(self.geoid_filter)]
@@ -300,7 +316,12 @@ class DailyMeasureData:
                     df[self.date_col] = pd.to_datetime(
                         df[self.date_col], errors="coerce"
                     )
-                df[self.geoid_col] = normalize_geoid_series(df[self.geoid_col])
+                df[self.geoid_col] = normalize_geoid_for_processing(
+                    df[self.geoid_col],
+                    treatment=self.geoid_treatment,
+                    n_digits=self.geoid_n_digits,
+                    numeric_type=self.geoid_numeric_type,
+                )
 
                 # --- 5. Filter by GEOID if provided (for wide format or non-chunked reads) ---
                 if self.geoid_filter is not None:
@@ -414,6 +435,9 @@ class DailyMeasureDataDir:
         read_dtype: str = "float32",
         geoid_filter: Optional[set] = None,
         file_extension: Optional[str] = None,
+        geoid_n_digits: int = 11,
+        geoid_treatment: str = "code",
+        geoid_numeric_type: str = "int",
     ):
         """
         Initialize a directory-level wrapper for daily measure files spanning multiple years.
@@ -540,6 +564,9 @@ class DailyMeasureDataDir:
         self.measure_type = measure_type
         self.read_dtype = read_dtype
         self.geoid_filter = geoid_filter
+        self.geoid_n_digits = geoid_n_digits
+        self.geoid_treatment = geoid_treatment
+        self.geoid_numeric_type = geoid_numeric_type
 
         # Rename dict per year (optional)
         self.rename_col_dict = rename_col_dict or {}
@@ -672,6 +699,9 @@ class DailyMeasureDataDir:
                 geoid_filter=self.geoid_filter,
                 geoid_col=self.geoid_col,
                 date_col=self.date_col,
+                geoid_n_digits=self.geoid_n_digits,
+                geoid_treatment=self.geoid_treatment,
+                geoid_numeric_type=self.geoid_numeric_type,
             )
 
         return self._cache[year_key]

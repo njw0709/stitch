@@ -7,8 +7,8 @@ from tqdm import tqdm
 
 from .daily_measure import DailyMeasureDataDir
 from .io_utils import (
-    normalize_geoid_series,
-    normalize_geoid_value,
+    normalize_geoid_for_processing,
+    normalize_geoid_value_for_processing,
     read_data,
     write_data,
 )
@@ -34,6 +34,9 @@ class ResidentialHistoryHRS:
         geoid: str = "GEOID2010",
         survey_yr_col: str = "year",
         first_tract_mark: float = 999.0,
+        geoid_n_digits: int = 11,
+        geoid_treatment: str = "code",
+        geoid_numeric_type: str = "int",
     ):
         self.filename = Path(filename)
         self.hhidpn = hhidpn
@@ -44,6 +47,9 @@ class ResidentialHistoryHRS:
         self.geoid = geoid
         self.survey_yr_col = survey_yr_col
         self.first_tract_mark = first_tract_mark
+        self.geoid_n_digits = geoid_n_digits
+        self.geoid_treatment = geoid_treatment
+        self.geoid_numeric_type = geoid_numeric_type
 
         # Load only once (file read can be expensive)
         self.df = read_data(self.filename)
@@ -88,7 +94,12 @@ class ResidentialHistoryHRS:
                 mvmonth = "01"
             start_dt = pd.to_datetime(f"{mvyear}-{mvmonth}-01")
             dates.append(start_dt)
-            geoids.append(normalize_geoid_value(first[self.geoid]))
+            geoids.append(normalize_geoid_value_for_processing(
+                first[self.geoid],
+                treatment=self.geoid_treatment,
+                n_digits=self.geoid_n_digits,
+                numeric_type=self.geoid_numeric_type,
+            ))
 
             # Subsequent moves
             moved_rows = df_person[df_person[self.movecol] == self.moved_mark]
@@ -97,7 +108,12 @@ class ResidentialHistoryHRS:
                     f"{int(row[self.mvyear])}-{int(row[self.mvmonth])}-01"
                 )
                 dates.append(dt)
-                geoids.append(normalize_geoid_value(row[self.geoid]))
+                geoids.append(normalize_geoid_value_for_processing(
+                    row[self.geoid],
+                    treatment=self.geoid_treatment,
+                    n_digits=self.geoid_n_digits,
+                    numeric_type=self.geoid_numeric_type,
+                ))
 
             move_info[pid] = (dates, geoids)
         debug = self.debug_move_info(move_info)
@@ -227,6 +243,9 @@ class HRSInterviewData:
         residential_hist: Optional[ResidentialHistoryHRS] = None,
         hhidpn: str = "hhidpn",
         geoid_col: str = "GEOID2010",
+        geoid_n_digits: int = 11,
+        geoid_treatment: str = "code",
+        geoid_numeric_type: str = "int",
     ):
         self.filename = Path(filename)
         self.df = read_data(self.filename)
@@ -238,6 +257,9 @@ class HRSInterviewData:
         self.move = move
         self.residential_hist = residential_hist
         self.geoid_col = geoid_col
+        self.geoid_n_digits = geoid_n_digits
+        self.geoid_treatment = geoid_treatment
+        self.geoid_numeric_type = geoid_numeric_type
 
         # Normalize date column to datetime
         if datecol in self.df.columns:
@@ -251,7 +273,12 @@ class HRSInterviewData:
 
         # Format the GEOID column if it exists and no residential history
         if not move and geoid_col in self.columns:
-            self.df[geoid_col] = normalize_geoid_series(self.df[geoid_col])
+            self.df[geoid_col] = normalize_geoid_for_processing(
+                self.df[geoid_col],
+                treatment=self.geoid_treatment,
+                n_digits=self.geoid_n_digits,
+                numeric_type=self.geoid_numeric_type,
+            )
 
     def get_geoid_based_on_date(self, date_series: pd.Series) -> pd.Series:
         return self.residential_hist.create_geoid_based_on_date(
@@ -260,12 +287,16 @@ class HRSInterviewData:
         )
 
     def save(self, save_name: Union[str, Path]) -> None:
-        # Convert GEOID columns to zero-padded strings before saving
         geoid_cols = [c for c in self.df.columns if self.geoid_col in c]
         df_to_save = self.df.copy()
         for col in geoid_cols:
             if col in df_to_save.columns:
-                df_to_save[col] = normalize_geoid_series(df_to_save[col])
+                df_to_save[col] = normalize_geoid_for_processing(
+                    df_to_save[col],
+                    treatment=self.geoid_treatment,
+                    n_digits=self.geoid_n_digits,
+                    numeric_type=self.geoid_numeric_type,
+                )
         write_data(df_to_save, save_name)
 
 
@@ -386,7 +417,12 @@ class HRSContextLinker:
             # Use the specified static GEOID column directly
             if geoid_col is None:
                 geoid_col = hrs_data.geoid_col
-            geoids = normalize_geoid_series(hrs_data.df[geoid_col])
+            geoids = normalize_geoid_for_processing(
+                hrs_data.df[geoid_col],
+                treatment=hrs_data.geoid_treatment,
+                n_digits=hrs_data.geoid_n_digits,
+                numeric_type=hrs_data.geoid_numeric_type,
+            )
         return geoids
 
     @staticmethod

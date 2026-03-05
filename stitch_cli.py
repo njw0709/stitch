@@ -170,6 +170,28 @@ def _create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include lag date columns in the output (default: False)",
     )
+
+    # GEOID normalization options
+    parser.add_argument(
+        "--geoid-treatment",
+        default="code",
+        choices=["code", "numeric"],
+        help='GEOID treatment: "code" for zero-padded string, "numeric" for int/float (default: code)',
+    )
+    parser.add_argument(
+        "--geoid-n-digits",
+        type=int,
+        default=11,
+        help="Number of digits for zero-padded GEOID strings (default: 11). "
+        "Set to 0 to disable zero-padding (digits only). "
+        "Only used with --geoid-treatment code.",
+    )
+    parser.add_argument(
+        "--geoid-numeric-type",
+        default="int",
+        choices=["int", "float"],
+        help='Numeric type for GEOID when --geoid-treatment is "numeric" (default: int)',
+    )
     return parser
 
 

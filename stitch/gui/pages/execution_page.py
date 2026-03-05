@@ -206,6 +206,15 @@ class ExecutionPage(QWizardPage):
         file_ext = wizard.field("file_extension")
         args.file_extension = file_ext if file_ext != "Auto-detect" else None
 
+        # GEOID normalization config
+        args.geoid_treatment = wizard.field("geoid_treatment") or "code"
+        zero_pad = wizard.field("geoid_zero_pad")
+        if zero_pad:
+            args.geoid_n_digits = int(wizard.field("geoid_n_digits") or 11)
+        else:
+            args.geoid_n_digits = 0
+        args.geoid_numeric_type = wizard.field("geoid_numeric_type") or "int"
+
         # Optional: residential history
         if wizard.field("use_residential_hist"):
             args.residential_hist = wizard.field("residential_hist_path")
