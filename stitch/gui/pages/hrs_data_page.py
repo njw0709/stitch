@@ -65,20 +65,13 @@ class HRSDataPage(QWizardPage):
         preview_group.setLayout(preview_layout)
         layout.addWidget(preview_group)
 
-        # Date column selection group
-        date_group = QGroupBox("Date Column")
-        date_layout = QFormLayout()
+        # Data configuration group
+        config_group = QGroupBox("Data Configuration")
+        config_layout = QFormLayout()
 
         self.date_column_combo = QComboBox()
         self.date_column_combo.currentTextChanged.connect(self._on_date_column_changed)
-        date_layout.addRow("Date Column:", self.date_column_combo)
-
-        date_group.setLayout(date_layout)
-        layout.addWidget(date_group)
-
-        # Configuration group
-        config_group = QGroupBox("Data Configuration")
-        config_layout = QFormLayout()
+        config_layout.addRow("Date Column:", self.date_column_combo)
 
         self.id_col_combo = QComboBox()
         config_layout.addRow("ID Column:", self.id_col_combo)

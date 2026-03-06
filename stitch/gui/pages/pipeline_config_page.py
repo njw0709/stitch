@@ -115,6 +115,14 @@ class PipelineConfigPage(QWizardPage):
         self.code_options_widget.setFlat(True)
         code_opts_layout = QFormLayout()
 
+        code_hint = QLabel(
+            "If checked, values are stripped to digits and left-padded with "
+            "zeros to N digits."
+        )
+        code_hint.setWordWrap(True)
+        code_hint.setStyleSheet("color: gray; font-style: italic;")
+        code_opts_layout.addRow(code_hint)
+
         self.zero_pad_checkbox = QCheckBox("Zero-pad to N digits")
         self.zero_pad_checkbox.setChecked(True)
         self.zero_pad_checkbox.stateChanged.connect(self._on_zero_pad_toggled)
@@ -130,14 +138,6 @@ class PipelineConfigPage(QWizardPage):
         code_row.addWidget(self.preview_btn)
         code_row.addStretch()
         code_opts_layout.addRow("", code_row)
-
-        code_hint = QLabel(
-            "If checked, values are stripped to digits and left-padded with "
-            "zeros to N digits. If unchecked, digits are kept as-is (no padding)."
-        )
-        code_hint.setWordWrap(True)
-        code_hint.setStyleSheet("color: gray; font-style: italic;")
-        code_opts_layout.addRow("", code_hint)
 
         self.code_options_widget.setLayout(code_opts_layout)
         geoid_layout.addWidget(self.code_options_widget)
@@ -460,9 +460,7 @@ class PipelineConfigPage(QWizardPage):
         if self.treatment_combo.currentIndex() == 0:
             summary_lines.append("Treatment: Code (string)")
             if self.zero_pad_checkbox.isChecked():
-                summary_lines.append(
-                    f"Zero-pad to {self.n_digits_spin.value()} digits"
-                )
+                summary_lines.append(f"Zero-pad to {self.n_digits_spin.value()} digits")
             else:
                 summary_lines.append("No zero-padding (digits only)")
         else:
