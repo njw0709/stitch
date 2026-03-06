@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 
 from PyQt6.QtWidgets import (
+    QComboBox,
     QWizardPage,
     QVBoxLayout,
     QPushButton,
@@ -173,6 +174,25 @@ class ExecutionPage(QWizardPage):
 
         self.setLayout(layout)
 
+    @staticmethod
+    def _get_residential_history_page(wizard: QWizard):
+        """Return the residential history wizard page, or None."""
+        for i in range(wizard.pageCount()):
+            page = wizard.page(i)
+            if hasattr(page, "moved_mark_combo") and hasattr(
+                page, "first_tract_combo"
+            ):
+                return page
+        return None
+
+    @staticmethod
+    def _combo_actual_value(combo: QComboBox) -> object:
+        """Return combo's current itemData (actual value) or currentText() if no data."""
+        data = combo.currentData()
+        if data is not None:
+            return data
+        return combo.currentText()
+
     def _build_args(self) -> argparse.Namespace:
         """Build pipeline arguments from wizard fields."""
         wizard = self.wizard()
@@ -217,15 +237,22 @@ class ExecutionPage(QWizardPage):
             args.res_hist_movecol = wizard.field("res_hist_movecol")
             args.res_hist_mvyear = wizard.field("res_hist_mvyear")
             args.res_hist_mvmonth = wizard.field("res_hist_mvmonth")
-            args.res_hist_moved_mark = wizard.field("res_hist_moved_mark")
             args.res_hist_geoid = wizard.field("res_hist_geoid")
             args.res_hist_survey_yr_col = wizard.field("res_hist_survey_yr_col")
-            # Convert first tract mark to float to match CLI behavior
-            _first_mark = wizard.field("res_hist_first_tract_mark")
-            try:
-                args.res_hist_first_tract_mark = float(_first_mark)
-            except (TypeError, ValueError):
-                args.res_hist_first_tract_mark = _first_mark
+            # Pass actual values (from itemData) for move/first-tract marks, not string-only
+            res_hist_page = self._get_residential_history_page(wizard)
+            if res_hist_page is not None:
+                args.res_hist_moved_mark = self._combo_actual_value(
+                    res_hist_page.moved_mark_combo
+                )
+                args.res_hist_first_tract_mark = self._combo_actual_value(
+                    res_hist_page.first_tract_combo
+                )
+            else:
+                args.res_hist_moved_mark = wizard.field("res_hist_moved_mark")
+                args.res_hist_first_tract_mark = wizard.field(
+                    "res_hist_first_tract_mark"
+                )
         else:
             args.residential_hist = None
 

@@ -202,16 +202,18 @@ class ResidentialHistoryPage(QWizardPage):
             file_path = self.file_picker.get_path()
             df = read_data(Path(file_path), usecols=[col_name]).head(1000)
 
-            # Get unique values and convert to strings
+            # Get unique values; display as strings in dropdown but store original value in itemData
             unique_values = df[col_name].dropna().unique()
-            unique_values = sorted([str(v) for v in unique_values])
+            sorted_values = sorted(unique_values, key=lambda v: str(v))
 
-            # Populate both dropdowns
+            # Populate both dropdowns: show str(v), pass actual v to pipeline via itemData
             self.moved_mark_combo.clear()
-            self.moved_mark_combo.addItems(unique_values)
+            for v in sorted_values:
+                self.moved_mark_combo.addItem(str(v), v)
 
             self.first_tract_combo.clear()
-            self.first_tract_combo.addItems(unique_values)
+            for v in sorted_values:
+                self.first_tract_combo.addItem(str(v), v)
 
             # Set defaults if they exist
             self._set_default_if_exists(self.moved_mark_combo, "1. move")
