@@ -219,40 +219,41 @@ class DailyMeasureData:
             else:
                 usecols = None  # need all columns to melt later
 
-            # Use chunked reading with filtering for long format when geoid_filter is provided
+            # Use full read + filtering for long format when geoid_filter is provided
             if self.format == "long" and self.geoid_filter is not None:
-                print(
-                    f"  Reading in chunks and filtering to {len(self.geoid_filter)} GEOIDs..."
-                )
-                chunks = []
-
-                # pyarrow engine does not support chunksize; use the C engine
-                csv_reader = pd.read_csv(
-                    self.filepath,
-                    dtype=dtype_dict,
-                    usecols=usecols,
-                    chunksize=1_000_000,
-                )
-
-                total_before = 0
-                for chunk in csv_reader:
-                    chunk = self._apply_rename(chunk)
-                    # Format GEOID for filtering
-                    chunk[self.geoid_col] = normalize_geoid_for_processing(
-                        chunk[self.geoid_col],
-                        treatment=self.geoid_treatment,
-                        n_digits=self.geoid_n_digits,
-                        numeric_type=self.geoid_numeric_type,
+                print(f"  Reading and filtering to {len(self.geoid_filter)} GEOIDs...")
+                try:
+                    df = pd.read_csv(
+                        self.filepath,
+                        dtype=dtype_dict,
+                        usecols=usecols,
+                        parse_dates=(
+                            [self.date_col] if self.date_col in self.columns else None
+                        ),
+                        engine="pyarrow",
                     )
-                    # Filter immediately - discard unwanted data early
-                    total_before += len(chunk)
-                    filtered = chunk[chunk[self.geoid_col].isin(self.geoid_filter)]
-                    if len(filtered) > 0:
-                        chunks.append(filtered)
+                except Exception:
+                    df = pd.read_csv(
+                        self.filepath,
+                        dtype=dtype_dict,
+                        usecols=usecols,
+                        parse_dates=(
+                            [self.date_col] if self.date_col in self.columns else None
+                        ),
+                        encoding="utf-8",
+                    )
+                df = self._apply_rename(df)
 
-                df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+                df[self.geoid_col] = normalize_geoid_for_processing(
+                    df[self.geoid_col],
+                    treatment=self.geoid_treatment,
+                    n_digits=self.geoid_n_digits,
+                    numeric_type=self.geoid_numeric_type,
+                )
 
-                # Parse dates after filtering (faster on smaller data)
+                total_before = len(df)
+                df = df[df[self.geoid_col].isin(self.geoid_filter)]
+
                 if (
                     self.date_col in df.columns
                     and df[self.date_col].dtype != "datetime64[ns]"
@@ -266,7 +267,6 @@ class DailyMeasureData:
                 )
 
                 self.df = df
-                # Check for duplicate date-geoid pairs
                 self._check_unique_date_geoid_pairs()
             else:
                 # Original full-load path for wide format or no filtering
@@ -281,7 +281,7 @@ class DailyMeasureData:
                         ),
                         engine="pyarrow",
                     )
-                except (ImportError, ValueError, TypeError):
+                except Exception:
                     df = pd.read_csv(
                         self.filepath,
                         dtype=dtype_dict,
@@ -289,6 +289,7 @@ class DailyMeasureData:
                         parse_dates=(
                             [self.date_col] if self.date_col in self.columns else None
                         ),
+                        encoding="utf-8",
                     )
 
                 df = self._apply_rename(df)
