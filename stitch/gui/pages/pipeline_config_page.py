@@ -2,7 +2,6 @@
 Pipeline configuration page.
 """
 
-import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -246,13 +245,17 @@ class PipelineConfigPage(QWizardPage):
 
     def _sample_unique_geoids(
         self, file_path: str, col_name: str, n: int = 3
-    ) -> List[str]:
-        """Read a small preview from *file_path* and return up to *n* unique raw values."""
+    ) -> list:
+        """Read a small preview from *file_path* and return up to *n* unique raw values.
+
+        Returns values in their original types (float, int, str) so the preview
+        normalization matches the pipeline, which receives the same types from read_data.
+        """
         df, _ = load_preview_data(file_path, n_rows=100)
         if df is None or col_name not in df.columns:
             return []
         raw = df[col_name].dropna().unique()
-        return [str(v) for v in raw[:n]]
+        return list(raw[:n])
 
     def _find_first_contextual_file(self) -> Optional[str]:
         """Return the path of the first matching contextual data file."""
@@ -327,10 +330,14 @@ class PipelineConfigPage(QWizardPage):
 
     def _auto_detect_n_digits(self):
         """Set the N-digits spinbox to the max digit length found in raw samples."""
+        from ...io_utils import normalize_geoid_value_for_processing
+
         max_len = 0
         for samples in self._raw_samples.values():
             for val in samples:
-                digits = re.sub(r"\D", "", val)
+                digits = normalize_geoid_value_for_processing(
+                    val, treatment="code", n_digits=0
+                )
                 max_len = max(max_len, len(digits))
         if max_len > 0:
             self.n_digits_spin.setValue(max_len)
