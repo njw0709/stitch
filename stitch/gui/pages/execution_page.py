@@ -177,11 +177,9 @@ class ExecutionPage(QWizardPage):
     @staticmethod
     def _get_residential_history_page(wizard: QWizard):
         """Return the residential history wizard page, or None."""
-        for i in range(wizard.pageCount()):
+        for i in wizard.pageIds():
             page = wizard.page(i)
-            if hasattr(page, "moved_mark_combo") and hasattr(
-                page, "first_tract_combo"
-            ):
+            if hasattr(page, "moved_mark_combo") and hasattr(page, "first_tract_combo"):
                 return page
         return None
 

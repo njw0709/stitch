@@ -91,7 +91,7 @@ def validate_date_column(df: pd.DataFrame, col: str) -> Tuple[bool, str]:
 
     try:
         # Try to convert to datetime
-        pd.to_datetime(df[col].dropna().head(100), errors="coerce")
+        pd.to_datetime(df[col].dropna().head(100), format="mixed", errors="coerce")
         return True, ""
     except Exception as e:
         return False, f"Column '{col}' cannot be interpreted as dates: {str(e)}"
