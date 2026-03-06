@@ -940,5 +940,5 @@ def run_pipeline(args: argparse.Namespace):
 
     # Save final dataset (use centralized writer for dtype conversion/sanitation)
     print(f"Saving final dataset to {out_path}")
-    write_data(final_df, out_path)
+    write_data(final_df, out_path, index=False)
     print("Done.")

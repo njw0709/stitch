@@ -427,9 +427,9 @@ def write_data(
         write_kwargs.update(kwargs)
         sanitized_df.to_csv(file_path, **write_kwargs)
     elif ext == "dta":
-        # Stata doesn't support index writing, so we don't pass it
-        # Remove index parameter if it was passed
+        # Stata uses write_index (not index); default to False for consistency
         write_kwargs = {k: v for k, v in kwargs.items() if k != "index"}
+        write_kwargs["write_index"] = kwargs.get("index", False)
 
         # Apply sanitation for Stata with type preservation
         sanitized_df = _sanitize_for_tabular(out_df, mode="preserve")
@@ -443,9 +443,15 @@ def write_data(
 
         sanitized_df.to_stata(file_path, **write_kwargs)
     elif ext in ("parquet", "pq"):
-        out_df.to_parquet(file_path, **kwargs)
+        write_kwargs = {"index": False}
+        write_kwargs.update(kwargs)
+        out_df.to_parquet(file_path, **write_kwargs)
     elif ext == "feather":
-        out_df.to_feather(file_path, **kwargs)
+        # Feather doesn't support index param; reset index to avoid writing it as column
+        write_kwargs = {k: v for k, v in kwargs.items() if k != "index"}
+        if kwargs.get("index", True):
+            out_df = out_df.reset_index(drop=True)
+        out_df.to_feather(file_path, **write_kwargs)
     elif ext in ("xlsx", "xls"):
         # Apply the same sanitation for Excel to ensure consistent, readable values
         sanitized_df = _sanitize_for_tabular(out_df)
