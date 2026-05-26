@@ -106,6 +106,33 @@ def test_hrs_context_linker_geoid_assignment(survey_with_residential_history):
         assert non_null_lengths.eq(11).all()
 
 
+def test_lag_column_naming_with_underscore_datecol(tmp_path):
+    """Lag suffix recovery must work when datecol itself contains underscores."""
+    df = pd.DataFrame(
+        {
+            "hhidpn": [1, 2],
+            "interview_date": pd.to_datetime(["2020-01-15", "2020-02-15"]),
+            "GEOID2010": ["01001000100", "01001000200"],
+        }
+    )
+    path = tmp_path / "survey.dta"
+    df.to_stata(path, write_index=False)
+
+    hrs = HRSInterviewData(path, datecol="interview_date", move=False)
+
+    date_col = HRSContextLinker.make_n_day_prior_cols(hrs, 30)
+    assert date_col == "interview_date_30day_prior"
+
+    geoid_col = HRSContextLinker.make_geoid_day_prior(hrs, date_col)
+    assert geoid_col == "GEOID2010_30day_prior"
+
+    batch_df = HRSContextLinker.prepare_lag_columns_batch(hrs, [7, 30])
+    assert "interview_date_7day_prior" in batch_df.columns
+    assert "GEOID2010_7day_prior" in batch_df.columns
+    assert "interview_date_30day_prior" in batch_df.columns
+    assert "GEOID2010_30day_prior" in batch_df.columns
+
+
 def test_data_consistency(residential_history_hrs, survey_data_hrs):
     """Test that residential history and survey data are consistent."""
     # Get person IDs from both datasets

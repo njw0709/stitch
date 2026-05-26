@@ -94,12 +94,14 @@ class ResidentialHistoryHRS:
                 mvmonth = "01"
             start_dt = pd.to_datetime(f"{mvyear}-{mvmonth}-01")
             dates.append(start_dt)
-            geoids.append(normalize_geoid_value_for_processing(
-                first[self.geoid],
-                treatment=self.geoid_treatment,
-                n_digits=self.geoid_n_digits,
-                numeric_type=self.geoid_numeric_type,
-            ))
+            geoids.append(
+                normalize_geoid_value_for_processing(
+                    first[self.geoid],
+                    treatment=self.geoid_treatment,
+                    n_digits=self.geoid_n_digits,
+                    numeric_type=self.geoid_numeric_type,
+                )
+            )
 
             # Subsequent moves
             moved_rows = df_person[df_person[self.movecol] == self.moved_mark]
@@ -114,12 +116,14 @@ class ResidentialHistoryHRS:
                     mv_month = int(row[self.mvmonth])
                 dt = pd.to_datetime(f"{mv_year}-{mv_month:02d}-01")
                 dates.append(dt)
-                geoids.append(normalize_geoid_value_for_processing(
-                    row[self.geoid],
-                    treatment=self.geoid_treatment,
-                    n_digits=self.geoid_n_digits,
-                    numeric_type=self.geoid_numeric_type,
-                ))
+                geoids.append(
+                    normalize_geoid_value_for_processing(
+                        row[self.geoid],
+                        treatment=self.geoid_treatment,
+                        n_digits=self.geoid_n_digits,
+                        numeric_type=self.geoid_numeric_type,
+                    )
+                )
 
             move_info[pid] = (dates, geoids)
         debug = self.debug_move_info(move_info)
@@ -344,6 +348,32 @@ class HRSContextLinker:
     """
 
     # ------------------------------------------------------------------
+    # Lag column naming helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _lag_suffix(n: int) -> str:
+        return f"{n}day_prior"
+
+    @staticmethod
+    def _lag_date_colname(datecol: str, n: int) -> str:
+        return f"{datecol}_{HRSContextLinker._lag_suffix(n)}"
+
+    @staticmethod
+    def _lag_geoid_colname(geoid_col: str, n: int) -> str:
+        return f"{geoid_col}_{HRSContextLinker._lag_suffix(n)}"
+
+    @staticmethod
+    def _lag_days_from_date_col(lag_date_col: str, datecol: str) -> int:
+        prefix = f"{datecol}_"
+        suffix = "day_prior"
+        if not lag_date_col.startswith(prefix) or not lag_date_col.endswith(suffix):
+            raise ValueError(
+                f"Lag date column {lag_date_col!r} does not match expected "
+                f"pattern {datecol!r}_{{n}}day_prior"
+            )
+        return int(lag_date_col[len(prefix) : -len(suffix)])
+
+    # ------------------------------------------------------------------
     # 1. n-day prior date column
     # ------------------------------------------------------------------
     @staticmethod
@@ -352,7 +382,7 @@ class HRSContextLinker:
         Create a new column representing the date n days prior to the
         respondent's reference date column.
         """
-        colname = f"{hrs_data.datecol}_{n_day_prior}day_prior"
+        colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n_day_prior)
         hrs_data.df[colname] = hrs_data.df[hrs_data.datecol] - pd.to_timedelta(
             n_day_prior, unit="d"
         )
@@ -398,7 +428,7 @@ class HRSContextLinker:
 
         # Create date columns for all lags
         for n in tqdm(n_days, desc="Creating date columns", unit="lag"):
-            date_colname = f"{hrs_data.datecol}_{n}day_prior"
+            date_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n)
             new_columns[date_colname] = result_df[hrs_data.datecol] - pd.to_timedelta(
                 n, unit="d"
             )
@@ -408,9 +438,8 @@ class HRSContextLinker:
             geoid_col = hrs_data.geoid_col
 
         for n in tqdm(n_days, desc="Creating GEOID columns", unit="lag"):
-            date_colname = f"{hrs_data.datecol}_{n}day_prior"
-            n_prior_str = "_".join(date_colname.split("_")[1:])
-            geoid_colname = f"{geoid_col}_{n_prior_str}"
+            date_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n)
+            geoid_colname = HRSContextLinker._lag_geoid_colname(geoid_col, n)
 
             # Use helper method to compute GEOIDs
             new_columns[geoid_colname] = HRSContextLinker._compute_geoid_for_date(
@@ -466,8 +495,8 @@ class HRSContextLinker:
         if geoid_col is None:
             geoid_col = hrs_data.geoid_col
         target_df = hrs_data.df if df is None else df
-        n_prior_str = "_".join(merge_date_col.split("_")[1:])
-        colname = f"{geoid_col}_{n_prior_str}"
+        n = HRSContextLinker._lag_days_from_date_col(merge_date_col, hrs_data.datecol)
+        colname = HRSContextLinker._lag_geoid_colname(geoid_col, n)
 
         # Compute GEOIDs using helper method
         geoids = HRSContextLinker._compute_geoid_for_date(
@@ -492,7 +521,8 @@ class HRSContextLinker:
         This is typically faster than looping year by year.
         """
         date_col = left_on[0]
-        nday_prior_str = "_".join(date_col.split("_")[1:])
+        n = HRSContextLinker._lag_days_from_date_col(date_col, hrs_data.datecol)
+        nday_prior_str = HRSContextLinker._lag_suffix(n)
 
         # Build one contextual DataFrame from all years
         years = contextual_dir.list_years()
@@ -585,8 +615,8 @@ class HRSContextLinker:
             contextual_data_col = [contextual_data_col]
 
         # Extract pre-computed lag columns
-        n_day_colname = f"{hrs_data.datecol}_{n}day_prior"
-        n_day_geoid_colname = f"{geoid_col}_{n}day_prior"
+        n_day_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n)
+        n_day_geoid_colname = HRSContextLinker._lag_geoid_colname(geoid_col, n)
 
         hrs_copy = precomputed_lag_df[
             [id_col, n_day_colname, n_day_geoid_colname]
