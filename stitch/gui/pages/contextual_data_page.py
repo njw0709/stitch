@@ -53,6 +53,9 @@ class ContextualDataPage(QWizardPage):
 
         self.dir_picker = DirectoryPicker()
         self.dir_picker.directorySelected.connect(self._on_directory_selected)
+        self.dir_picker.path_edit.textChanged.connect(
+            lambda: self._set_field_error(self.dir_picker.path_edit, False)
+        )
         dir_layout.addRow("Contextual Data Directory:", self.dir_picker)
 
         # File extension selector
@@ -65,7 +68,10 @@ class ContextualDataPage(QWizardPage):
         # File name filter input and Load preview button (same row)
         self.measure_type_edit = QLineEdit()
         self.measure_type_edit.setPlaceholderText(
-            "Files containing this substring will be selected"
+            "Shared substring in the file names to select (e.g. 'pm25_')"
+        )
+        self.measure_type_edit.textChanged.connect(
+            lambda: self._set_field_error(self.measure_type_edit, False)
         )
         self.load_preview_btn = QPushButton("Load preview")
         self.load_preview_btn.clicked.connect(self._on_load_preview_clicked)
@@ -90,7 +96,7 @@ class ContextualDataPage(QWizardPage):
         filter_row = QHBoxLayout()
         filter_row.addWidget(self.measure_type_edit, 1)
         filter_row.addWidget(self.load_preview_btn, 0)
-        dir_layout.addRow("Filter by (filename):", filter_row)
+        dir_layout.addRow("Common file name head:", filter_row)
 
         dir_group.setLayout(dir_layout)
         layout.addWidget(dir_group)
@@ -181,9 +187,15 @@ class ContextualDataPage(QWizardPage):
         self.data_col_hidden.setVisible(False)
 
         self.geoid_col_combo = QComboBox()
+        self.geoid_col_combo.currentTextChanged.connect(
+            lambda: self._set_field_error(self.geoid_col_combo, False)
+        )
         columns_layout.addRow("GEOID Column:", self.geoid_col_combo)
 
         self.date_col_combo = QComboBox()
+        self.date_col_combo.currentTextChanged.connect(
+            lambda: self._set_field_error(self.date_col_combo, False)
+        )
         columns_layout.addRow("Date Column:", self.date_col_combo)
 
         columns_group.setLayout(columns_layout)
@@ -192,10 +204,11 @@ class ContextualDataPage(QWizardPage):
         layout.addStretch()
         self.setLayout(layout)
 
-        # Register fields
-        self.registerField("context_dir*", self.dir_picker.path_edit)
-        self.registerField("measure_type*", self.measure_type_edit)
-        self.registerField("data_col*", self.data_col_hidden)
+        # Register fields (validation handled in validatePage so the Next
+        # button stays interactive and missing fields can be highlighted)
+        self.registerField("context_dir", self.dir_picker.path_edit)
+        self.registerField("measure_type", self.measure_type_edit)
+        self.registerField("data_col", self.data_col_hidden)
         self.registerField("contextual_geoid_col", self.geoid_col_combo, "currentText")
         self.registerField("context_date_col", self.date_col_combo, "currentText")
         self.registerField("file_extension", self.file_ext_combo, "currentText")
@@ -301,6 +314,7 @@ class ContextualDataPage(QWizardPage):
 
         # Add to list
         self.data_col_list.addItem(selected_col)
+        self._set_field_error(self.data_col_list, False)
         self._update_data_col_field()
         self.completeChanged.emit()
 
@@ -358,29 +372,71 @@ class ContextualDataPage(QWizardPage):
         if index >= 0:
             combo.setCurrentIndex(index)
 
+    ERROR_STYLE = "border: 2px solid #dc3545; border-radius: 3px;"
+
+    def _set_field_error(self, widget, has_error: bool):
+        """Toggle a red error border on a widget."""
+        widget.setStyleSheet(self.ERROR_STYLE if has_error else "")
+
     def isComplete(self):
-        """Check if the page is complete."""
-        # Must have valid directory
-        if not self.dir_picker.get_path():
-            return False
-        if not self.dir_picker.is_valid():
-            return False
+        """Keep the Next button interactive; validation runs in validatePage."""
+        return True
 
-        # Must have measure type
-        if not self.measure_type_edit.text().strip():
-            return False
+    def validatePage(self):
+        """Validate required fields, highlighting any that are missing."""
+        # If the preview was never loaded but we have enough to try, auto-load
+        # it so the user doesn't have to press 'Load preview' separately.
+        if (
+            not self.file_paths
+            and self.dir_picker.get_path()
+            and self.dir_picker.is_valid()
+            and self.measure_type_edit.text().strip()
+        ):
+            self._on_load_preview_clicked()
 
-        # Must have validated files
-        if not self.file_paths:
-            return False
+        problems = []
 
-        # Must have columns selected
-        # Must have at least one data column
-        if self.data_col_list.count() == 0:
-            return False
-        if not self.geoid_col_combo.currentText():
-            return False
-        if not self.date_col_combo.currentText():
+        # Directory
+        dir_ok = bool(self.dir_picker.get_path()) and self.dir_picker.is_valid()
+        self._set_field_error(self.dir_picker.path_edit, not dir_ok)
+        if not dir_ok:
+            problems.append("a valid data directory")
+
+        # Common file name head
+        measure_ok = bool(self.measure_type_edit.text().strip())
+        self._set_field_error(self.measure_type_edit, not measure_ok)
+        if not measure_ok:
+            problems.append("a common file name head")
+
+        # Column selections (populated only after a successful preview load)
+        data_col_ok = self.data_col_list.count() > 0
+        self._set_field_error(self.data_col_list, not data_col_ok)
+        if not data_col_ok:
+            problems.append("at least one contextual data column")
+
+        geoid_ok = bool(self.geoid_col_combo.currentText())
+        self._set_field_error(self.geoid_col_combo, not geoid_ok)
+        if not geoid_ok:
+            problems.append("a GEOID column")
+
+        date_ok = bool(self.date_col_combo.currentText())
+        self._set_field_error(self.date_col_combo, not date_ok)
+        if not date_ok:
+            problems.append("a date column")
+
+        # Files must have been validated via Load preview
+        files_ok = bool(self.file_paths)
+
+        if problems or not files_ok:
+            if not files_ok and not problems:
+                message = (
+                    "Click 'Load preview' to validate the files before continuing."
+                )
+            else:
+                message = "Please provide: " + ", ".join(problems) + "."
+                if not files_ok:
+                    message += " Then click 'Load preview' to validate the files."
+            self.validation_label.setText(f"✗ {message}")
             return False
 
         return True
