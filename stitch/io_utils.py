@@ -134,6 +134,110 @@ def apply_geoid_normalization(
     return as_str
 
 
+# ------------------------------------------------------------------
+# Flexible datetime inference
+# ------------------------------------------------------------------
+
+# Values coarser than the finest linkage resolution are anchored to the exact
+# midpoint of the period they span (start + (end - start) / 2), minimizing
+# expected temporal error and keeping timestamps meaningful for future
+# finer-than-daily linkage. E.g. 2013 → 2013-07-02 12:00, 2013-02 →
+# 2013-02-15 00:00, 2013-03-10 → 2013-03-10 12:00.
+
+def _mid_of_period(start: pd.Timestamp, end: pd.Timestamp) -> pd.Timestamp:
+    """Midpoint of the half-open interval [start, end)."""
+    return start + (end - start) / 2
+
+
+def _mid_of_year(year: int) -> pd.Timestamp:
+    return _mid_of_period(pd.Timestamp(year, 1, 1), pd.Timestamp(year + 1, 1, 1))
+
+
+def _mid_of_month(year: int, month: int) -> pd.Timestamp:
+    start = pd.Timestamp(year, month, 1)
+    return _mid_of_period(start, start + pd.DateOffset(months=1))
+
+
+def _mid_of_day(day_start: pd.Timestamp) -> pd.Timestamp:
+    return _mid_of_period(day_start, day_start + pd.Timedelta(days=1))
+
+
+def _numeric_to_datetime(val) -> pd.Timestamp:
+    """Interpret a numeric time value as ``YYYY``, ``YYYYMM`` or ``YYYYMMDD``.
+
+    Needed because ``pd.to_datetime`` treats bare numbers as nanoseconds since
+    epoch (so a year column like 2010 would silently misparse), and guesses
+    6-digit values like 201003 as 2020-10-03 instead of March 2010.
+    """
+    if pd.isna(val) or int(val) != val:
+        return pd.NaT
+    iv = int(val)
+    if 1000 <= iv <= 9999:  # YYYY
+        return _mid_of_year(iv)
+    if 100001 <= iv <= 999912 and 1 <= iv % 100 <= 12:  # YYYYMM
+        return _mid_of_month(iv // 100, iv % 100)
+    if 10000101 <= iv <= 99991231:  # YYYYMMDD
+        parsed = pd.to_datetime(str(iv), format="%Y%m%d", errors="coerce")
+        return pd.NaT if pd.isna(parsed) else _mid_of_day(parsed)
+    return pd.NaT
+
+
+def _text_to_datetime(val) -> pd.Timestamp:
+    """Parse a date string, anchoring omitted components to period midpoints.
+
+    Parsing the same string against two different default dates reveals which
+    components were actually present in the string: a component that follows
+    the default was omitted.
+    """
+    from datetime import datetime
+    from dateutil import parser as du_parser
+
+    try:
+        d1 = du_parser.parse(val, default=datetime(2000, 1, 1, 0, 0))
+        d2 = du_parser.parse(val, default=datetime(2004, 2, 2, 2, 2))
+    except (ValueError, OverflowError, TypeError):
+        return pd.NaT
+    if d1.year != d2.year:  # no year in the string — cannot anchor in time
+        return pd.NaT
+    if d1.month != d2.month:  # year only
+        return _mid_of_year(d1.year)
+    if d1.day != d2.day:  # year + month only
+        return _mid_of_month(d1.year, d1.month)
+    if d1.hour != d2.hour:  # date only, no time-of-day
+        return _mid_of_day(pd.Timestamp(d1))
+    return pd.Timestamp(d1)
+
+
+def infer_datetime_series(series: pd.Series) -> pd.Series:
+    """
+    Parse a Series holding time information in an unknown format into datetimes.
+
+    The format is inferred per value, so mixed representations are fine:
+    datetime columns pass through unchanged; numeric values (and digit-only
+    strings) are read as ``YYYY``, ``YYYYMM`` or ``YYYYMMDD``; other strings
+    are parsed flexibly (``"2010-03-15"``, ``"2010-03"``, ``"March 2010"``,
+    ``"21sep2018"``, ...). Values coarser than the finest resolution are
+    anchored to the midpoint of the period they span — e.g. ``2013`` →
+    2013-07-02 12:00 (mid-year) and ``"2013-03-10"`` → 2013-03-10 12:00
+    (noon). Unparseable values become ``NaT``.
+    """
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return pd.to_datetime(series)
+    if pd.api.types.is_numeric_dtype(series):
+        return series.apply(_numeric_to_datetime)
+
+    as_str = series.astype("string").str.strip()
+    as_str = as_str.mask(as_str == "")
+    digit_mask = as_str.str.fullmatch(r"\d+(?:\.0+)?").fillna(False)
+    numeric_part = pd.to_numeric(as_str.where(digit_mask), errors="coerce").apply(
+        _numeric_to_datetime
+    )
+    text_part = as_str.where(~digit_mask).apply(
+        lambda v: pd.NaT if pd.isna(v) else _text_to_datetime(v)
+    )
+    return numeric_part.where(digit_mask, text_part)
+
+
 def _filter_kwargs(func: callable, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """
     Filter kwargs to only include parameters that are valid for the given function.

@@ -34,15 +34,8 @@ def convert_csv_to_stata():
         print(f"Converting {csv_file} to {dta_file}")
         df = pd.read_csv(csv_file)
 
-        # Handle empty strings for numeric columns
-        df["mvyear"] = df["mvyear"].replace("", pd.NA)
-        df["mvmonth"] = df["mvmonth"].replace("", pd.NA)
-        df["year"] = df["year"].replace("", pd.NA)
-
-        # Convert to appropriate types
-        df["mvyear"] = pd.to_numeric(df["mvyear"], errors="coerce")
-        df["mvmonth"] = pd.to_numeric(df["mvmonth"], errors="coerce")
-        df["year"] = pd.to_numeric(df["year"], errors="coerce")
+        # move_date stays as a string — its format is inferred at load time
+        df["move_date"] = df["move_date"].astype(str)
 
         df.to_stata(dta_file, write_index=False)
         print(f"Created {dta_file} with {len(df)} rows")
@@ -77,7 +70,7 @@ def verify_stata_files():
         df = pd.read_stata(dta_file)
         print(f"Shape: {df.shape}")
         print(f"Columns: {list(df.columns)}")
-        print(f"Unique people: {df['hhidpn'].nunique()}")
+        print(f"Unique people: {df['personid'].nunique()}")
         print("Sample data:")
         print(df.head())
 

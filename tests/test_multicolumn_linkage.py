@@ -535,9 +535,7 @@ def test_multicolumn_with_residential_history(
 
     # Load residential history
     print("📥 Loading residential history...")
-    residential_hist = ResidentialHistoryHRS(
-        fake_residential_history_file, first_tract_mark="999.0"
-    )
+    residential_hist = ResidentialHistoryHRS(fake_residential_history_file)
 
     # Load survey data with residential history
     print("📥 Loading survey data with residential history...")

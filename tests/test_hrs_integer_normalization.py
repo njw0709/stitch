@@ -33,26 +33,20 @@ def residential_data_with_float_pids(tmp_path, sample_geoid_pool):
 
     for i in range(5):
         pid = float(base_pid + i)  # Explicitly float
-        # First tract
+        # Survey entry
         data.append(
             {
                 "hhidpn": pid,
-                "trmove_tr": 999.0,
-                "mvyear": None,
-                "mvmonth": None,
-                "GEOID2010": sample_geoid_pool[i],
-                "year": 2010,
+                "move_date": "2010-01-15",
+                "GEOID": sample_geoid_pool[i],
             }
         )
         # One move
         data.append(
             {
                 "hhidpn": pid,
-                "trmove_tr": "1. move",
-                "mvyear": 2015,
-                "mvmonth": 6,
-                "GEOID2010": sample_geoid_pool[(i + 1) % len(sample_geoid_pool)],
-                "year": None,
+                "move_date": "2015-06-10",
+                "GEOID": sample_geoid_pool[(i + 1) % len(sample_geoid_pool)],
             }
         )
 
@@ -70,26 +64,20 @@ def residential_data_with_string_pids(tmp_path, sample_geoid_pool):
 
     for i in range(5):
         pid = str(base_pid + i)  # Explicitly string
-        # First tract
+        # Survey entry
         data.append(
             {
                 "hhidpn": pid,
-                "trmove_tr": 999.0,
-                "mvyear": None,
-                "mvmonth": None,
-                "GEOID2010": sample_geoid_pool[i],
-                "year": 2010,
+                "move_date": "2010-01-15",
+                "GEOID": sample_geoid_pool[i],
             }
         )
         # One move
         data.append(
             {
                 "hhidpn": pid,
-                "trmove_tr": "1. move",
-                "mvyear": 2015,
-                "mvmonth": 6,
-                "GEOID2010": sample_geoid_pool[(i + 1) % len(sample_geoid_pool)],
-                "year": None,
+                "move_date": "2015-06-10",
+                "GEOID": sample_geoid_pool[(i + 1) % len(sample_geoid_pool)],
             }
         )
 
@@ -107,26 +95,20 @@ def residential_data_with_int_pids(tmp_path, sample_geoid_pool):
 
     for i in range(5):
         pid = int(base_pid + i)  # Explicitly int
-        # First tract
+        # Survey entry
         data.append(
             {
                 "hhidpn": pid,
-                "trmove_tr": 999.0,
-                "mvyear": None,
-                "mvmonth": None,
-                "GEOID2010": sample_geoid_pool[i],
-                "year": 2010,
+                "move_date": "2010-01-15",
+                "GEOID": sample_geoid_pool[i],
             }
         )
         # One move
         data.append(
             {
                 "hhidpn": pid,
-                "trmove_tr": "1. move",
-                "mvyear": 2015,
-                "mvmonth": 6,
-                "GEOID2010": sample_geoid_pool[(i + 1) % len(sample_geoid_pool)],
-                "year": None,
+                "move_date": "2015-06-10",
+                "GEOID": sample_geoid_pool[(i + 1) % len(sample_geoid_pool)],
             }
         )
 
@@ -186,7 +168,7 @@ def survey_data_with_string_pids(tmp_path, sample_geoid_pool):
 def test_load_residential_history_with_float_pids(residential_data_with_float_pids):
     """Test that residential history correctly loads and normalizes float PIDs."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_float_pids, first_tract_mark=999.0
+        residential_data_with_float_pids
     )
 
     # Check that hhidpn column is Int64 dtype
@@ -205,7 +187,7 @@ def test_load_residential_history_with_float_pids(residential_data_with_float_pi
 def test_load_residential_history_with_string_pids(residential_data_with_string_pids):
     """Test that residential history correctly loads and normalizes string PIDs."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_string_pids, first_tract_mark=999.0
+        residential_data_with_string_pids
     )
 
     # Check that hhidpn column is Int64 dtype
@@ -222,7 +204,7 @@ def test_load_residential_history_with_string_pids(residential_data_with_string_
 def test_load_residential_history_with_int_pids(residential_data_with_int_pids):
     """Test that residential history correctly loads and normalizes int PIDs."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_int_pids, first_tract_mark=999.0
+        residential_data_with_int_pids
     )
 
     # Check that hhidpn column is Int64 dtype
@@ -239,7 +221,7 @@ def test_load_residential_history_with_int_pids(residential_data_with_int_pids):
 def test_move_info_has_integer_keys(residential_data_with_float_pids):
     """Test that _move_info dict uses integer keys regardless of input type."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_float_pids, first_tract_mark=999.0
+        residential_data_with_float_pids
     )
 
     # Check that all keys are Python ints
@@ -262,7 +244,7 @@ def test_move_info_has_integer_keys(residential_data_with_float_pids):
 def test_create_geoid_with_float_input(residential_data_with_float_pids):
     """Test create_geoid_based_on_date with float PIDs in input series."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_float_pids, first_tract_mark=999.0
+        residential_data_with_float_pids
     )
 
     # Create input series with float PIDs
@@ -285,7 +267,7 @@ def test_create_geoid_with_float_input(residential_data_with_float_pids):
 def test_create_geoid_with_string_input(residential_data_with_string_pids):
     """Test create_geoid_based_on_date with string PIDs in input series."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_string_pids, first_tract_mark=999.0
+        residential_data_with_string_pids
     )
 
     # Create input series with string PIDs
@@ -308,7 +290,7 @@ def test_create_geoid_with_string_input(residential_data_with_string_pids):
 def test_create_geoid_with_int_input(residential_data_with_int_pids):
     """Test create_geoid_based_on_date with int PIDs in input series."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_int_pids, first_tract_mark=999.0
+        residential_data_with_int_pids
     )
 
     # Create input series with int PIDs
@@ -331,7 +313,7 @@ def test_create_geoid_with_int_input(residential_data_with_int_pids):
 def test_create_geoid_with_mixed_input(residential_data_with_float_pids):
     """Test create_geoid_based_on_date with mixed-type PIDs in input (as strings from CSV)."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_float_pids, first_tract_mark=999.0
+        residential_data_with_float_pids
     )
 
     # Simulate PIDs as they might come from a CSV (mixed numeric types)
@@ -357,7 +339,7 @@ def test_end_to_end_float_to_float(
 ):
     """Test end-to-end: float PIDs in both residential and survey data."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_float_pids, first_tract_mark=999.0
+        residential_data_with_float_pids
     )
 
     survey = HRSInterviewData(
@@ -382,7 +364,7 @@ def test_end_to_end_string_to_string(
 ):
     """Test end-to-end: string PIDs in both residential and survey data."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_string_pids, first_tract_mark=999.0
+        residential_data_with_string_pids
     )
 
     survey = HRSInterviewData(
@@ -407,7 +389,7 @@ def test_end_to_end_float_to_string(
 ):
     """Test end-to-end: float PIDs in residential, string PIDs in survey (mixed types)."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_float_pids, first_tract_mark=999.0
+        residential_data_with_float_pids
     )
 
     survey = HRSInterviewData(
@@ -432,7 +414,7 @@ def test_end_to_end_string_to_float(
 ):
     """Test end-to-end: string PIDs in residential, float PIDs in survey (mixed types)."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_string_pids, first_tract_mark=999.0
+        residential_data_with_string_pids
     )
 
     survey = HRSInterviewData(
@@ -456,7 +438,7 @@ def test_end_to_end_string_to_float(
 def test_edge_case_na_pids(residential_data_with_float_pids):
     """Test that NA PIDs in input series return None GEOIDs."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_float_pids, first_tract_mark=999.0
+        residential_data_with_float_pids
     )
 
     # Create input with some NA PIDs
@@ -482,7 +464,7 @@ def test_edge_case_na_pids(residential_data_with_float_pids):
 def test_edge_case_mismatched_pids(residential_data_with_float_pids):
     """Test that PIDs not in residential history return None GEOIDs."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_float_pids, first_tract_mark=999.0
+        residential_data_with_float_pids
     )
 
     # PIDs 9999998 and 9999999 don't exist in residential history
@@ -509,10 +491,10 @@ def test_edge_case_mismatched_pids(residential_data_with_float_pids):
 def test_geoid_values_correctness(residential_data_with_float_pids, sample_geoid_pool):
     """Test that returned GEOIDs are the correct ones based on dates."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_float_pids, first_tract_mark=999.0
+        residential_data_with_float_pids
     )
 
-    # PID 10000001: first tract at 2010-01-01 with geoid[0], move at 2015-06-01 with geoid[1]
+    # PID 10000001: survey entry 2010-01-15 with geoid[0], move 2015-06-10 (noon) with geoid[1]
     pids = pd.Series([10000001, 10000001, 10000001])
     dates = pd.Series(
         [
@@ -543,7 +525,7 @@ def test_geoid_values_correctness(residential_data_with_float_pids, sample_geoid
 def test_debug_move_info(residential_data_with_float_pids):
     """Test the debug_move_info method provides useful information."""
     res_hist = ResidentialHistoryHRS(
-        residential_data_with_float_pids, first_tract_mark=999.0
+        residential_data_with_float_pids
     )
 
     debug_info = res_hist.debug_move_info(n_samples=3)

@@ -768,14 +768,9 @@ def run_pipeline(args: argparse.Namespace):
         print("Loading residential history...")
         residential_hist = ResidentialHistoryHRS(
             filename=Path(args.residential_hist),
-            hhidpn=args.res_hist_hhidpn,
-            movecol=args.res_hist_movecol,
-            mvyear=args.res_hist_mvyear,
-            mvmonth=args.res_hist_mvmonth,
-            moved_mark=args.res_hist_moved_mark,
-            geoid=args.res_hist_geoid,
-            survey_yr_col=args.res_hist_survey_yr_col,
-            first_tract_mark=args.res_hist_first_tract_mark,
+            id_col=args.res_hist_id_col,
+            date_col=args.res_hist_date_col,
+            geoid_col=args.res_hist_geoid_col,
             geoid_n_digits=geoid_n_digits,
             geoid_treatment=geoid_treatment,
             geoid_numeric_type=geoid_numeric_type,

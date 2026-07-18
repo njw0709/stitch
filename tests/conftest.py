@@ -60,14 +60,9 @@ def fake_residential_history_file(tmp_path_factory, real_geoid_pool):
     # Get data from standalone generator
     data_rows = create_residential_history_data(n_people=55, geoid_pool=real_geoid_pool)
 
-    # Convert to DataFrame
+    # Convert to DataFrame (move_date stays as string — format is inferred)
     df = pd.DataFrame(data_rows)
-
-    # Convert appropriate columns to proper types
-    df["mvyear"] = pd.to_numeric(df["mvyear"], errors="coerce")
-    df["mvmonth"] = pd.to_numeric(df["mvmonth"], errors="coerce")
-    df["year"] = pd.to_numeric(df["year"], errors="coerce")
-    df["trmove_tr"] = df["trmove_tr"].astype(str)
+    df["move_date"] = df["move_date"].astype(str)
 
     # Save to temporary file
     tmp_path = tmp_path_factory.mktemp("data")
@@ -87,9 +82,7 @@ def residential_history_hrs(fake_residential_history_file):
     ResidentialHistoryHRS
         Initialized instance with fake data
     """
-    return ResidentialHistoryHRS(
-        fake_residential_history_file, first_tract_mark="999.0"
-    )
+    return ResidentialHistoryHRS(fake_residential_history_file)
 
 
 @pytest.fixture(scope="session")

@@ -39,9 +39,7 @@ def test_batch_processing_workflow(
 
     # Step 1: Load residential history
     print("📥 Loading residential history...")
-    residential_hist = ResidentialHistoryHRS(
-        fake_residential_history_file, first_tract_mark="999.0"
-    )
+    residential_hist = ResidentialHistoryHRS(fake_residential_history_file)
 
     # Step 2: Load survey data
     print("📥 Loading survey data (2016-2020)...")
@@ -145,9 +143,7 @@ def test_parallel_processing_workflow(
 
     # Step 1: Load residential history
     print("📥 Loading residential history...")
-    residential_hist = ResidentialHistoryHRS(
-        fake_residential_history_file, first_tract_mark="999.0"
-    )
+    residential_hist = ResidentialHistoryHRS(fake_residential_history_file)
 
     # Step 2: Load survey data
     print("📥 Loading survey data (2016-2020)...")

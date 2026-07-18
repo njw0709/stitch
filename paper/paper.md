@@ -70,22 +70,22 @@ First, STITCH requires a primary dataset to which the contextual information wil
 
 Second, STITCH can optionally take a dataset containing residential histories. This dataset includes information about when and where participants moved. If no residential history is provided, the location information from the primary dataset is used for all time lags. An example is shown below.
 
-| Participant ID | Moved Indicator   | Year | Month | Census Tract FIPS Code  |
-|----------------|-------------------|------|-------|-------------------------|
-| 1              | 999.0             | 2010 | 2     | 27503002857            |
-| 1              | move              | 2011 | 1     | 31093008015            |
-| 2              | 999.0             | 2010 | 3     | 25328004727            |
-| 2              | move              | 2011 | 1     | 50262000210            |
-| 3              | 999.0             | 2012 | 3     | 67890023156            |
-| 3              | move              | 2013 | 4     | 31093008015            |
-| 3              | move              | 2014 | 10    | 50262000210            |
-| 3              | move              | 2016 | 1     | 98765391820            |
+| Participant ID | Move Date | Census Tract FIPS Code  |
+|----------------|-----------|-------------------------|
+| 1              | 2010-02   | 27503002857            |
+| 1              | 2011-01   | 31093008015            |
+| 2              | 2010-03   | 25328004727            |
+| 2              | 2011-01   | 50262000210            |
+| 3              | 2012      | 67890023156            |
+| 3              | 2013-04   | 31093008015            |
+| 3              | 2014-10   | 50262000210            |
+| 3              | 2016-01   | 98765391820            |
 
 : **Example residential history dataset.** When a participant’s location changes over time, STITCH updates the location based on the relevant time point using the residential history dataset. If no location change is recorded, the location information from the primary dataset is used for all time points.
 
-The residential history dataset must contain five columns: participant ID, moved indicator, year, month, and location. Participant IDs link residential histories to the corresponding rows in the primary dataset. The moved indicator specifies whether each row represents the participant’s initial entry into the study or a subsequent move. In the example above, 999.0 designates the entry point, and "move" indicates a residential change. Because the dataset is in long format, participants with multiple moves appear in multiple rows (e.g., participant 3).
+The residential history dataset must contain three columns: participant ID, move date, and location. Participant IDs link residential histories to the corresponding rows in the primary dataset. Each row records the date on which the participant began living at the associated location, so the earliest-dated row per participant is treated as their residence at study entry and no separate "moved indicator" column is required. Because the dataset is in long format, participants with multiple moves appear in multiple rows (e.g., participant 3).
 
-Time information is separated into year and month to accommodate the common situation in survey-based studies where the exact month of a move is known but the exact day is not. If month information is missing, STITCH assumes the move (or study entry) occurred in January of that year.
+The move date accommodates the common situation in survey-based studies where the precision of a move date varies. STITCH infers the format of each value individually—accepting full dates (e.g., `2013-06-15`, `March 2013`), year-month values (e.g., `2013-06`), or year-only values (e.g., `2013`)—and anchors values coarser than daily resolution to the midpoint of the period they span (year-only to mid-year, year-month to mid-month). This preserves meaningful timestamps for future finer-than-daily linkage.
 
 Finally, STITCH requires the directory where contextual data are stored in the local environment. These data must be organized in yearly files that follow a consistent naming scheme. For example, daily air pollution data might appear as one CSV per year:
 
@@ -147,7 +147,7 @@ Here, the user begins by browsing and selecting the base (survey/interview) data
 
 ![Residential history dataset selection and configuration page. (Optional)](figures/gui_screen_2.png){ #fig:gui_2 width=50% }
 
-If the user has a dataset containing residential history information, they can select it here (\autoref{fig:gui_2}). The dataset must be in a supported format (e.g., .dta, .csv, .parquet, .feather, .xlsx, .xls). STITCH-GUI then reads the selected dataset to populate the dropdown menu options below. The user must specify: (1) the participant ID column, (2) the moved indicator column, (3) the year column, and (4) the month column. If month information is missing, STITCH assumes the move (or study entry) occurred in January of that year.
+If the user has a dataset containing residential history information, they can select it here (\autoref{fig:gui_2}). The dataset must be in a supported format (e.g., .dta, .csv, .parquet, .feather, .xlsx, .xls). STITCH-GUI then reads the selected dataset to populate the dropdown menu options below. The user must specify three columns: (1) the participant ID column, (2) the move date column, and (3) the location (GEOID) column. STITCH-GUI automatically checks that the selected move date column parses as dates and infers the precision of each value (full date, year-month, or year-only), so the exact day of a move need not be known.
 
 
 3. **Contextual data directory selection** 

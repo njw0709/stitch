@@ -19,13 +19,18 @@ from PyQt6.QtWidgets import (
 
 from ..widgets.file_picker import FilePicker
 from ..widgets.data_preview_table import DataPreviewTable
-from ...io_utils import read_data
+from ...io_utils import infer_datetime_series, read_data
 from ..validators import validate_data_file, load_preview_data
 
 
 class ResidentialHistoryPage(QWizardPage):
     """
     Wizard page for optional residential history configuration.
+
+    The residential history is a simple long-format table with one row per
+    residence: a participant ID column, a move date column (format inferred;
+    the earliest entry per person is their residence at survey entry), and a
+    GEOID column.
     """
 
     def __init__(self, parent=None):
@@ -48,6 +53,17 @@ class ResidentialHistoryPage(QWizardPage):
         # Container for residential history options
         self.res_hist_widget = QGroupBox("Residential History Configuration")
         res_hist_layout = QVBoxLayout()
+
+        # Description of the expected format
+        format_label = QLabel(
+            "Provide a table with one row per residence and three columns: a "
+            "participant ID, a move date, and a GEOID. The earliest entry per "
+            "person is used as their residence at survey entry. Move date "
+            "formats are inferred automatically (e.g. 2013, 2013-06, "
+            "March 2013, 2013-06-15)."
+        )
+        format_label.setWordWrap(True)
+        res_hist_layout.addWidget(format_label)
 
         # File selection
         file_layout = QFormLayout()
@@ -77,38 +93,22 @@ class ResidentialHistoryPage(QWizardPage):
         # Column selections
         columns_layout = QFormLayout()
 
-        self.hhidpn_combo = QComboBox()
-        columns_layout.addRow("ID Column (hhidpn):", self.hhidpn_combo)
+        self.id_combo = QComboBox()
+        columns_layout.addRow("ID Column:", self.id_combo)
 
-        self.movecol_combo = QComboBox()
-        self.movecol_combo.currentTextChanged.connect(self._on_movecol_changed)
-        columns_layout.addRow("Move Indicator Column:", self.movecol_combo)
-
-        self.mvyear_combo = QComboBox()
-        columns_layout.addRow("Move Year Column:", self.mvyear_combo)
-
-        self.mvmonth_combo = QComboBox()
-        columns_layout.addRow("Move Month Column:", self.mvmonth_combo)
-
-        self.survey_yr_combo = QComboBox()
-        columns_layout.addRow(
-            "Survey Year Column (Will be used if Move Year is empty):",
-            self.survey_yr_combo,
-        )
+        self.date_combo = QComboBox()
+        self.date_combo.currentTextChanged.connect(self._on_date_col_changed)
+        columns_layout.addRow("Move Date Column:", self.date_combo)
 
         self.geoid_combo = QComboBox()
         columns_layout.addRow("GEOID Column:", self.geoid_combo)
 
-        # Dropdowns for marks (populated from move indicator column)
-        self.moved_mark_combo = QComboBox()
-        self.moved_mark_combo.setEditable(True)
-        columns_layout.addRow("Moved Mark Value:", self.moved_mark_combo)
-
-        self.first_tract_combo = QComboBox()
-        self.first_tract_combo.setEditable(True)
-        columns_layout.addRow("First Tract Mark:", self.first_tract_combo)
-
         res_hist_layout.addLayout(columns_layout)
+
+        # Feedback about whether the selected date column parses
+        self.date_check_label = QLabel("")
+        self.date_check_label.setWordWrap(True)
+        res_hist_layout.addWidget(self.date_check_label)
 
         self.res_hist_widget.setLayout(res_hist_layout)
         self.res_hist_widget.setEnabled(False)
@@ -120,18 +120,9 @@ class ResidentialHistoryPage(QWizardPage):
         # Register fields
         self.registerField("use_residential_hist", self.use_res_hist_checkbox)
         self.registerField("residential_hist_path", self.file_picker.path_edit)
-        self.registerField("res_hist_hhidpn", self.hhidpn_combo, "currentText")
-        self.registerField("res_hist_movecol", self.movecol_combo, "currentText")
-        self.registerField("res_hist_mvyear", self.mvyear_combo, "currentText")
-        self.registerField("res_hist_mvmonth", self.mvmonth_combo, "currentText")
-        self.registerField(
-            "res_hist_survey_yr_col", self.survey_yr_combo, "currentText"
-        )
-        self.registerField("res_hist_geoid", self.geoid_combo, "currentText")
-        self.registerField("res_hist_moved_mark", self.moved_mark_combo, "currentText")
-        self.registerField(
-            "res_hist_first_tract_mark", self.first_tract_combo, "currentText"
-        )
+        self.registerField("res_hist_id_col", self.id_combo, "currentText")
+        self.registerField("res_hist_date_col", self.date_combo, "currentText")
+        self.registerField("res_hist_geoid_col", self.geoid_combo, "currentText")
 
     def _on_checkbox_changed(self, state):
         """Handle checkbox state change."""
@@ -166,76 +157,64 @@ class ResidentialHistoryPage(QWizardPage):
         # Populate column dropdowns
         columns = preview_df.columns.tolist()
 
-        self.hhidpn_combo.clear()
-        self.hhidpn_combo.addItems(columns)
-        self._set_default_if_exists(self.hhidpn_combo, "hhidpn")
+        self.id_combo.clear()
+        self.id_combo.addItems(columns)
+        self._set_default_if_exists(self.id_combo, "hhidpn")
 
-        self.movecol_combo.clear()
-        self.movecol_combo.addItems(columns)
-        self._set_default_if_exists(self.movecol_combo, "trmove_tr")
-
-        self.mvyear_combo.clear()
-        self.mvyear_combo.addItems(columns)
-        self._set_default_if_exists(self.mvyear_combo, "mvyear")
-
-        self.mvmonth_combo.clear()
-        self.mvmonth_combo.addItems(columns)
-        self._set_default_if_exists(self.mvmonth_combo, "mvmonth")
-
-        self.survey_yr_combo.clear()
-        self.survey_yr_combo.addItems(columns)
-        self._set_default_if_exists(self.survey_yr_combo, "year")
+        self.date_combo.clear()
+        self.date_combo.addItems(columns)
+        self._set_default_if_exists(self.date_combo, "move_date")
 
         self.geoid_combo.clear()
         self.geoid_combo.addItems(columns)
-        self._set_default_if_exists(self.geoid_combo, "GEOID2010")
+        self._set_default_if_exists(self.geoid_combo, "GEOID")
 
+        self._on_date_col_changed(self.date_combo.currentText())
         self.completeChanged.emit()
 
-    def _on_movecol_changed(self, col_name: str):
-        """Handle move column selection change - populate mark dropdowns."""
+    def _on_date_col_changed(self, col_name: str):
+        """Check that the selected move-date column can be parsed as dates."""
         if not col_name or not self.file_picker.get_path():
+            self.date_check_label.setText("")
             return
 
         try:
-            # Read first 1000 rows to get unique values (any supported format)
             file_path = self.file_picker.get_path()
             df = read_data(Path(file_path), usecols=[col_name]).head(1000)
+            parsed = infer_datetime_series(df[col_name])
+            total = df[col_name].notna().sum()
+            parsed_ok = parsed.notna().sum()
 
-            # Get unique values; display as strings in dropdown but store original value in itemData
-            unique_values = df[col_name].dropna().unique()
-            sorted_values = sorted(unique_values, key=lambda v: str(v))
-
-            # Populate both dropdowns: show str(v), pass actual v to pipeline via itemData
-            self.moved_mark_combo.clear()
-            for v in sorted_values:
-                self.moved_mark_combo.addItem(str(v), v)
-
-            self.first_tract_combo.clear()
-            for v in sorted_values:
-                self.first_tract_combo.addItem(str(v), v)
-
-            # Set defaults if they exist
-            self._set_default_if_exists(self.moved_mark_combo, "1. move")
-            self._set_default_if_exists(self.first_tract_combo, "999.0")
-
+            if total == 0:
+                self.date_check_label.setText(
+                    "⚠️ The selected date column has no values in the preview."
+                )
+            elif parsed_ok == 0:
+                self.date_check_label.setText(
+                    "❌ None of the values in this column could be parsed as "
+                    "dates. Choose a different column or check the format."
+                )
+            elif parsed_ok < total:
+                example = parsed[parsed.notna()].iloc[0]
+                self.date_check_label.setText(
+                    f"⚠️ {parsed_ok}/{total} values parsed as dates "
+                    f"(e.g. {example:%Y-%m-%d}). Unparseable rows will be skipped."
+                )
+            else:
+                example = parsed.iloc[0]
+                self.date_check_label.setText(
+                    f"✓ All {total} sampled values parsed as dates "
+                    f"(e.g. {example:%Y-%m-%d})."
+                )
         except Exception as e:
-            QMessageBox.warning(
-                self,
-                "Error Loading Values",
-                f"Could not load unique values from move column: {str(e)}",
-            )
+            self.date_check_label.setText(f"⚠️ Could not check date column: {e}")
 
     def _clear_column_combos(self):
         """Clear all column combo boxes."""
-        self.hhidpn_combo.clear()
-        self.movecol_combo.clear()
-        self.mvyear_combo.clear()
-        self.mvmonth_combo.clear()
-        self.survey_yr_combo.clear()
+        self.id_combo.clear()
+        self.date_combo.clear()
         self.geoid_combo.clear()
-        self.moved_mark_combo.clear()
-        self.first_tract_combo.clear()
+        self.date_check_label.setText("")
 
     def _set_default_if_exists(self, combo: QComboBox, default_value: str):
         """Set combo box to default value if it exists in the list."""
@@ -258,11 +237,8 @@ class ResidentialHistoryPage(QWizardPage):
         # Check all combos have selections
         if not all(
             [
-                self.hhidpn_combo.currentText(),
-                self.movecol_combo.currentText(),
-                self.mvyear_combo.currentText(),
-                self.mvmonth_combo.currentText(),
-                self.survey_yr_combo.currentText(),
+                self.id_combo.currentText(),
+                self.date_combo.currentText(),
                 self.geoid_combo.currentText(),
             ]
         ):

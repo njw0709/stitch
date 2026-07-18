@@ -304,7 +304,7 @@ class PipelineConfigPage(QWizardPage):
         # Residential History
         if wizard.field("use_residential_hist"):
             res_path = wizard.field("residential_hist_path")
-            res_geoid = wizard.field("res_hist_geoid")
+            res_geoid = wizard.field("res_hist_geoid_col")
             if res_path and res_geoid:
                 samples = self._sample_unique_geoids(res_path, res_geoid)
                 self._raw_samples["ResHist"] = samples
@@ -434,8 +434,9 @@ class PipelineConfigPage(QWizardPage):
             res_hist_path = wizard.field("residential_hist_path")
             summary_lines.append("Enabled: Yes")
             summary_lines.append(f"File: {res_hist_path}")
-            summary_lines.append(f"ID Column: {wizard.field('res_hist_hhidpn')}")
-            summary_lines.append(f"Move Column: {wizard.field('res_hist_movecol')}")
+            summary_lines.append(f"ID Column: {wizard.field('res_hist_id_col')}")
+            summary_lines.append(f"Move Date Column: {wizard.field('res_hist_date_col')}")
+            summary_lines.append(f"GEOID Column: {wizard.field('res_hist_geoid_col')}")
         else:
             summary_lines.append("Enabled: No")
         summary_lines.append("")

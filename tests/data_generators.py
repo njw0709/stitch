@@ -83,7 +83,11 @@ def create_residential_history_data(
     n_people: int = 55, geoid_pool: List[str] = None
 ) -> List[dict]:
     """
-    Create fake residential history data with varied move patterns.
+    Create fake residential history data with varied move patterns, in the
+    simplified long format: one row per residence with ``hhidpn``,
+    ``move_date``, and ``GEOID`` columns. The earliest entry per person is
+    their residence at survey entry (2010). Move dates mix representations
+    (full date, year-month, year-only) to exercise date format inference.
 
     Parameters
     ----------
@@ -109,35 +113,38 @@ def create_residential_history_data(
         else:  # ~15 people with 2-4 moves
             n_moves = np.random.randint(2, 5)
 
-        # First tract (survey year 2010)
-        first_geoid = generate_fake_geoid(geoid_pool)
+        # Survey entry (2010) — full date
+        entry_month = np.random.randint(1, 13)
+        entry_day = np.random.randint(1, 29)
         rows.append(
             {
                 "hhidpn": hhidpn,
-                "trmove_tr": "999.0",  # First tract marker as string
-                "mvyear": np.nan,  # No move year for first tract
-                "mvmonth": np.nan,  # No move month for first tract
-                "GEOID2010": first_geoid,
-                "year": 2010,
+                "move_date": f"2010-{entry_month:02d}-{entry_day:02d}",
+                "GEOID": generate_fake_geoid(geoid_pool),
             }
         )
 
-        # Add moves if any
+        # Add moves if any (move years strictly increase, so mixing
+        # year-only / year-month / full-date formats keeps chronology)
         current_year = 2010
         for move_num in range(n_moves):
             # Move year: 2011-2019, ensuring chronological order
             move_year = np.random.randint(current_year + 1, min(current_year + 3, 2020))
             move_month = np.random.randint(1, 13)
-            move_geoid = generate_fake_geoid(geoid_pool)
+            move_day = np.random.randint(1, 29)
+
+            if move_num % 3 == 0:
+                move_date = f"{move_year}-{move_month:02d}"  # year-month
+            elif move_num % 3 == 1:
+                move_date = f"{move_year}-{move_month:02d}-{move_day:02d}"
+            else:
+                move_date = str(move_year)  # year only
 
             rows.append(
                 {
                     "hhidpn": hhidpn,
-                    "trmove_tr": "1. move",
-                    "mvyear": move_year,
-                    "mvmonth": move_month,
-                    "GEOID2010": move_geoid,
-                    "year": np.nan,  # Not applicable for moves
+                    "move_date": move_date,
+                    "GEOID": generate_fake_geoid(geoid_pool),
                 }
             )
 

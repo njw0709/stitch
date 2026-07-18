@@ -24,17 +24,17 @@ python stitch_cli.py \
 
 With residential history:
 -------------------------
+The residential history file is a simple long-format table with one row per
+residence: a participant ID column, a move date column (format is inferred;
+the earliest entry per person is their residence at survey entry), and a
+GEOID column.
+
 python stitch_cli.py \
     --survey-data "C:/path/to/Surveyprep2016full.dta" \
     --residential-hist "C:/path/to/residential_history.dta" \
-    --res-hist-hhidpn hhidpn \
-    --res-hist-movecol trmove_tr \
-    --res-hist-mvyear mvyear \
-    --res-hist-mvmonth mvmonth \
-    --res-hist-moved-mark "1. move" \
-    --res-hist-geoid GEOID2010 \
-    --res-hist-survey-yr-col year \
-    --res-hist-first-tract-mark 999.0 \
+    --res-hist-id-col hhidpn \
+    --res-hist-date-col move_date \
+    --res-hist-geoid-col GEOID \
     --context-dir "C:/path/to/daily_heat_long" \
     --output "C:/path/to/output/SurveyHeatLinked.dta" \
     --id-col hhidpn \
@@ -115,45 +115,23 @@ def _create_parser() -> argparse.ArgumentParser:
 
     # Residential history configuration options
     parser.add_argument(
-        "--res-hist-hhidpn",
+        "--res-hist-id-col",
         default="hhidpn",
         help="ID column name in residential history (default: hhidpn)",
     )
     parser.add_argument(
-        "--res-hist-movecol",
-        default="trmove_tr",
-        help="Move indicator column name in residential history (default: trmove_tr)",
+        "--res-hist-date-col",
+        default="move_date",
+        help="Move date column name in residential history (default: move_date). "
+        "Format is inferred per value: dates, year-month (2010-03), month names "
+        "(March 2010), or numeric YYYY / YYYYMM / YYYYMMDD. Values coarser than "
+        "daily are anchored to the midpoint of the period they span. The "
+        "earliest entry per person is their residence at survey entry.",
     )
     parser.add_argument(
-        "--res-hist-mvyear",
-        default="mvyear",
-        help="Move year column name in residential history (default: mvyear)",
-    )
-    parser.add_argument(
-        "--res-hist-mvmonth",
-        default="mvmonth",
-        help="Move month column name in residential history (default: mvmonth)",
-    )
-    parser.add_argument(
-        "--res-hist-moved-mark",
-        default="1. move",
-        help="Value indicating a move occurred in residential history (default: '1. move')",
-    )
-    parser.add_argument(
-        "--res-hist-geoid",
-        default="GEOID2010",
-        help="GEOID column name in residential history (default: GEOID2010)",
-    )
-    parser.add_argument(
-        "--res-hist-survey-yr-col",
-        default="year",
-        help="Survey year column name in residential history (default: year)",
-    )
-    parser.add_argument(
-        "--res-hist-first-tract-mark",
-        type=float,
-        default=999.0,
-        help="Value indicating first tract in residential history (default: 999.0)",
+        "--res-hist-geoid-col",
+        default="GEOID",
+        help="GEOID column name in residential history (default: GEOID)",
     )
 
     parser.add_argument(

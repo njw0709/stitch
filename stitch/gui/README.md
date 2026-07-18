@@ -54,9 +54,10 @@ python gui_app.py
 
 2. **Configure Residential History** (Optional)
    - Check "Use residential history data" if participants moved during study period
-   - Load the residential history file
-   - Map columns for ID, move indicators, dates, and GEOIDs
-   - Set mark values for moves and first tract entries
+   - Load the residential history file (one row per residence)
+   - Map the three columns: participant ID, move date, and GEOID
+   - The move-date column is checked automatically to confirm it parses as dates;
+     the earliest entry per person is used as their residence at survey entry
 
 3. **Select Contextual Data**
    - Browse to directory containing daily contextual data files

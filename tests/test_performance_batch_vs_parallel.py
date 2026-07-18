@@ -57,9 +57,7 @@ def test_performance_small_dataset(
     print("=" * 80)
 
     # Load data
-    residential_hist = ResidentialHistoryHRS(
-        fake_residential_history_file, first_tract_mark="999.0"
-    )
+    residential_hist = ResidentialHistoryHRS(fake_residential_history_file)
     hrs_data = HRSInterviewData(
         survey_data_2016_2020,
         datecol="iwdate",
@@ -169,9 +167,7 @@ def test_performance_large_dataset(
     print("=" * 80)
 
     # Load residential history
-    residential_hist = ResidentialHistoryHRS(
-        fake_residential_history_file, first_tract_mark="999.0"
-    )
+    residential_hist = ResidentialHistoryHRS(fake_residential_history_file)
 
     # Create large survey data
     print("📥 Creating large survey dataset...")
@@ -268,9 +264,7 @@ def test_performance_many_lags(
     print("=" * 80)
 
     # Load data
-    residential_hist = ResidentialHistoryHRS(
-        fake_residential_history_file, first_tract_mark="999.0"
-    )
+    residential_hist = ResidentialHistoryHRS(fake_residential_history_file)
     hrs_data = HRSInterviewData(
         survey_data_2016_2020,
         datecol="iwdate",
@@ -365,9 +359,7 @@ def test_comprehensive_performance_comparison(
     print("=" * 80)
 
     # Load base data
-    residential_hist = ResidentialHistoryHRS(
-        fake_residential_history_file, first_tract_mark="999.0"
-    )
+    residential_hist = ResidentialHistoryHRS(fake_residential_history_file)
     base_hrs_data = HRSInterviewData(
         survey_data_2016_2020,
         datecol="iwdate",

@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from .daily_measure import DailyMeasureDataDir
 from .io_utils import (
+    infer_datetime_series,
     normalize_geoid_for_processing,
     normalize_geoid_value_for_processing,
     read_data,
@@ -19,113 +20,96 @@ from .io_utils import (
 # ---------------------------------------------------------------------
 class ResidentialHistoryHRS:
     """
-    Parses respondent-level residential move history from HRS geocoded data,
-    and enables date-based GEOID lookup for linkage with contextual datasets.
+    Parses respondent-level residential move history and enables date-based
+    GEOID lookup for linkage with contextual datasets.
+
+    Expects a simple long-format table with one row per residence:
+
+    * ``id_col``    — participant ID
+    * ``date_col``  — when the participant started living at that location.
+      The earliest entry per person is treated as their entry into the survey.
+      The format is inferred per value (dates, "YYYY-MM", month names,
+      numeric YYYY / YYYYMM / YYYYMMDD, ...); values coarser than the finest
+      resolution are anchored to the midpoint of the period they span
+      (e.g. 2013 → mid-year 2013-07-02 12:00).
+    * ``geoid_col`` — location identifier for that residence
     """
 
     def __init__(
         self,
         filename: Union[str, Path],
-        hhidpn: str = "hhidpn",
-        movecol: str = "trmove_tr",
-        mvyear: str = "mvyear",
-        mvmonth: str = "mvmonth",
-        moved_mark: str = "1. move",
-        geoid: str = "GEOID2010",
-        survey_yr_col: str = "year",
-        first_tract_mark: float = 999.0,
+        id_col: str = "hhidpn",
+        date_col: str = "move_date",
+        geoid_col: str = "GEOID",
         geoid_n_digits: int = 11,
         geoid_treatment: str = "code",
         geoid_numeric_type: str = "int",
     ):
         self.filename = Path(filename)
-        self.hhidpn = hhidpn
-        self.movecol = movecol
-        self.mvyear = mvyear
-        self.mvmonth = mvmonth
-        self.moved_mark = moved_mark
-        self.geoid = geoid
-        self.survey_yr_col = survey_yr_col
-        self.first_tract_mark = first_tract_mark
+        self.id_col = id_col
+        self.date_col = date_col
+        self.geoid_col = geoid_col
         self.geoid_n_digits = geoid_n_digits
         self.geoid_treatment = geoid_treatment
         self.geoid_numeric_type = geoid_numeric_type
 
         # Load only once (file read can be expensive)
         self.df = read_data(self.filename)
+        missing = [
+            c for c in (id_col, date_col, geoid_col) if c not in self.df.columns
+        ]
+        if missing:
+            raise ValueError(
+                f"Residential history file {self.filename} is missing "
+                f"column(s) {missing}. Available columns: {list(self.df.columns)}"
+            )
         # Normalize identifier type to integer (nullable) for consistent keying
-        if self.hhidpn in self.df.columns:
-            self.df[self.hhidpn] = pd.to_numeric(
-                self.df[self.hhidpn], errors="coerce"
-            ).astype("Int64")
+        self.df[self.id_col] = pd.to_numeric(
+            self.df[self.id_col], errors="coerce"
+        ).astype("Int64")
         self._move_info = self._parse_move_info()
 
     def _parse_move_info(self) -> Dict[int, tuple[list[pd.Timestamp], list[str]]]:
         """
-        Builds a dict mapping hhidpn → (list of move dates, list of corresponding GEOIDs)
+        Builds a dict mapping participant ID → (list of move dates, list of
+        corresponding GEOIDs), sorted chronologically. The earliest entry is
+        the participant's residence at survey entry.
         """
         print("📌 Parsing residential move history...")
-        move_info = {}
-        for pid, df_person in tqdm(self.df.groupby(self.hhidpn)):
-            # Ensure pid keys are Python ints
-            pid = int(pid)
-            dates, geoids = [], []
+        parsed_dates = infer_datetime_series(self.df[self.date_col])
 
-            # First tract - handle both numeric and string comparison
-            # (column may be object dtype if mixed with strings)
-            first_rows = df_person[
-                (df_person[self.movecol] == self.first_tract_mark)
-                | (df_person[self.movecol] == str(self.first_tract_mark))
-            ]
-            if first_rows.empty:
-                print("debug: first row not found!")
-                print(df_person.head())
-                print(f"pid: {pid}")
-                continue
-            first = first_rows.iloc[0]
-            if not pd.isna(first[self.mvyear]):
-                mvyear = f"{int(first[self.mvyear])}"
-                if pd.isna(first[self.mvmonth]):
-                    mvmonth = "01"
-                else:
-                    mvmonth = f"{int(first[self.mvmonth]):02d}"
-            else:
-                mvyear = f"{int(first[self.survey_yr_col])}"
-                mvmonth = "01"
-            start_dt = pd.to_datetime(f"{mvyear}-{mvmonth}-01")
-            dates.append(start_dt)
-            geoids.append(
+        unparseable = parsed_dates.isna() & self.df[self.date_col].notna()
+        if unparseable.any():
+            examples = self.df.loc[unparseable, self.date_col].unique()[:5]
+            print(
+                f"⚠️  {int(unparseable.sum())} value(s) in {self.date_col!r} could "
+                f"not be parsed as dates and were skipped. Examples: {list(examples)}"
+            )
+        if parsed_dates.isna().all():
+            raise ValueError(
+                f"No value in column {self.date_col!r} could be parsed as a date. "
+                "Supported formats include dates (2010-03-15), year-month "
+                "(2010-03), month names (March 2010), and numeric "
+                "YYYY / YYYYMM / YYYYMMDD."
+            )
+
+        rows = self.df[[self.id_col, self.geoid_col]].copy()
+        rows["_move_dt"] = parsed_dates
+        rows = rows.dropna(subset=[self.id_col, "_move_dt"])
+
+        move_info = {}
+        for pid, df_person in tqdm(rows.groupby(self.id_col)):
+            df_person = df_person.sort_values("_move_dt", kind="stable")
+            geoids = [
                 normalize_geoid_value_for_processing(
-                    first[self.geoid],
+                    g,
                     treatment=self.geoid_treatment,
                     n_digits=self.geoid_n_digits,
                     numeric_type=self.geoid_numeric_type,
                 )
-            )
-
-            # Subsequent moves
-            moved_rows = df_person[df_person[self.movecol] == self.moved_mark]
-            for _, row in moved_rows.iterrows():
-                if pd.isna(row[self.mvyear]):
-                    mv_year = int(row[self.survey_yr_col])
-                else:
-                    mv_year = int(row[self.mvyear])
-                if pd.isna(row[self.mvmonth]):
-                    mv_month = 1
-                else:
-                    mv_month = int(row[self.mvmonth])
-                dt = pd.to_datetime(f"{mv_year}-{mv_month:02d}-01")
-                dates.append(dt)
-                geoids.append(
-                    normalize_geoid_value_for_processing(
-                        row[self.geoid],
-                        treatment=self.geoid_treatment,
-                        n_digits=self.geoid_n_digits,
-                        numeric_type=self.geoid_numeric_type,
-                    )
-                )
-
-            move_info[pid] = (dates, geoids)
+                for g in df_person[self.geoid_col]
+            ]
+            move_info[int(pid)] = (list(df_person["_move_dt"]), geoids)
         debug = self.debug_move_info(move_info)
         print("Residential history parsed! Debug: {}".format(debug))
         return move_info

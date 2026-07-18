@@ -43,12 +43,9 @@ def residential_history():
     """Load residential history from CSV with custom column mappings."""
     return ResidentialHistoryHRS(
         SURVEY_DATA_DIR / "fake_residential_history.csv",
-        hhidpn="personid",
-        movecol="mover",
-        geoid="GEOID",
-        survey_yr_col="iwyear",
-        first_tract_mark=999,
-        moved_mark=1,
+        id_col="personid",
+        date_col="move_date",
+        geoid_col="GEOID",
     )
 
 
@@ -129,17 +126,19 @@ class TestResidentialHistoryFromCSV:
             f"Expected zero-padded GEOID, got {geoids[0]}"
         )
 
-    def test_missing_mvyear_mvmonth_handled(self, residential_history):
-        """Persons with NaN mvyear/mvmonth should not crash and should
-        fall back to survey_yr_col for year and 1 for month."""
-        pid = 10000029  # move row has empty mvyear and mvmonth
+    def test_year_only_move_date_handled(self, residential_history):
+        """Persons whose move date is a year-only value should not crash and
+        should be anchored to the middle of that year."""
+        pid = 10000029  # entry 2014, move 2016 (year-only)
         assert pid in residential_history._move_info, (
-            f"Person {pid} with NaN move data should still be parsed"
+            f"Person {pid} with year-only move data should still be parsed"
         )
         dates, geoids = residential_history._move_info[pid]
         assert len(dates) >= 2, (
-            f"Person {pid} should have first tract + move, got {len(dates)}"
+            f"Person {pid} should have entry + move, got {len(dates)}"
         )
+        # Year-only 2016 anchors to mid-2016 (leap year -> exactly Jul 2 00:00)
+        assert dates[-1] == pd.Timestamp("2016-07-02 00:00:00")
 
 
 # ── GEOID Assignment Accuracy ────────────────────────────────────────
@@ -149,11 +148,11 @@ class TestGeoidAssignmentAccuracy:
     """Validate GEOID lookup returns correct values for known persons."""
 
     def test_non_mover_geoid_constant(self, residential_history):
-        """Person 10000001 never moved (GEOID 48307950300 from iwyear=2018).
-        Any date after Jan-2018 should return the same GEOID."""
+        """Person 10000001 never moved (GEOID 48307950300, entry year 2018 →
+        anchored to mid-2018). Any date after mid-2018 returns the same GEOID."""
         pids = pd.Series([10000001, 10000001])
         dates = pd.Series([
-            pd.Timestamp("2018-06-15"),
+            pd.Timestamp("2018-08-15"),
             pd.Timestamp("2019-12-01"),
         ])
         result = residential_history.create_geoid_based_on_date(pids, dates)
@@ -175,15 +174,15 @@ class TestGeoidAssignmentAccuracy:
         result = residential_history.create_geoid_based_on_date(pids, dates)
         assert result.iloc[0] == "48113980000"
 
-    def test_mover_no_month_defaults_to_january(self, residential_history):
+    def test_mover_no_month_defaults_to_midyear(self, residential_history):
         """Person 10000022 moved in 2013 with no month specified.
-        First tract GEOID 17113001106 (iwyear=2012).
-        Move defaults to Jan 2013 -> GEOID 48113980000.
-        A date in Feb 2013 should return the post-move GEOID."""
+        Entry GEOID 17113001106 (entry year 2012 -> mid-2012).
+        Year-only move 2013 -> anchored to mid-2013 -> GEOID 48113980000.
+        A date after mid-2013 should return the post-move GEOID."""
         pids = pd.Series([10000022, 10000022])
         dates = pd.Series([
-            pd.Timestamp("2012-11-01"),  # before move -> first tract
-            pd.Timestamp("2013-02-01"),  # after Jan-2013 move -> new GEOID
+            pd.Timestamp("2013-01-01"),  # before mid-2013 move -> entry tract
+            pd.Timestamp("2013-09-01"),  # after mid-2013 move -> new GEOID
         ])
         result = residential_history.create_geoid_based_on_date(pids, dates)
         assert result.iloc[0] == "17113001106"
@@ -198,10 +197,10 @@ class TestGeoidAssignmentAccuracy:
 
     def test_multiple_moves_correct_geoid(self, residential_history):
         """Person 10000041 has 3 moves:
-        - First tract: GEOID 18003002000 (iwyear=2013)
-        - Move 1: GEOID 39057200900 (2015-Feb)
-        - Move 2: GEOID 48113980000 (2016-Jan, month missing -> defaults to Jan)
-        - Move 3: GEOID 17113001106 (2019-Apr)
+        - Entry: GEOID 18003002000 (entry year 2013 -> mid-2013)
+        - Move 1: GEOID 39057200900 (2015-02 -> mid-Feb 2015)
+        - Move 2: GEOID 48113980000 (year-only 2016 -> mid-2016)
+        - Move 3: GEOID 17113001106 (2019-04 -> mid-Apr 2019)
         Validate GEOIDs at dates between each move."""
         pids = pd.Series([10000041] * 4)
         dates = pd.Series([

@@ -91,14 +91,9 @@ python stitch_cli.py \
 python stitch_cli.py \
     --survey-data "path/to/surveyprep2016full.dta" \
     --residential-hist "path/to/residential_history.dta" \
-    --res-hist-hhidpn hhidpn \
-    --res-hist-movecol trmove_tr \
-    --res-hist-mvyear mvyear \
-    --res-hist-mvmonth mvmonth \
-    --res-hist-moved-mark "1. move" \
-    --res-hist-geoid GEOID2010 \
-    --res-hist-survey-yr-col year \
-    --res-hist-first-tract-mark 999.0 \
+    --res-hist-id-col hhidpn \
+    --res-hist-date-col move_date \
+    --res-hist-geoid-col GEOID \
     --context-dir "path/to/daily_heat_long" \
     --output_name "surveyHeatLinked.dta" \
     --id-col hhidpn \
@@ -136,15 +131,19 @@ python stitch_cli.py \
 
 ### Residential History Arguments
 
+The residential history file is a long-format table with one row per residence
+and three columns: a participant ID, a move date, and a GEOID. The earliest
+entry per person is used as their residence at survey entry (no special "first
+tract" marker is needed).
+
 - `--residential-hist`: Path to residential history file
-- `--res-hist-hhidpn`: ID column in residential history
-- `--res-hist-movecol`: Move indicator column
-- `--res-hist-mvyear`: Move year column
-- `--res-hist-mvmonth`: Move month column
-- `--res-hist-moved-mark`: Value indicating a move (default: "1. move")
-- `--res-hist-geoid`: GEOID column in residential history
-- `--res-hist-survey-yr-col`: Survey year column
-- `--res-hist-first-tract-mark`: First tract indicator value (default: 999.0)
+- `--res-hist-id-col`: ID column in residential history (default: hhidpn)
+- `--res-hist-date-col`: Move date column (default: move_date). The format is
+  inferred per value: full dates (`2010-03-15`, `March 2010`, `21sep2018`),
+  year-month (`2010-03`), or numeric `YYYY` / `YYYYMM` / `YYYYMMDD`. Values
+  coarser than daily are anchored to the midpoint of the period they span
+  (year-only → mid-year, year-month → mid-month, date-only → noon).
+- `--res-hist-geoid-col`: GEOID column in residential history (default: GEOID)
 
 ## Package Structure
 
@@ -241,12 +240,13 @@ python stitch_cli.py \
 
 ### Residential History (Optional)
 - Format: Stata (.dta), CSV, Parquet, Feather, or Excel file
-- Required columns:
-  - Participant ID
-  - Move indicator
-  - Move year/month
-  - GEOID for each residence
-  - Survey year
+- Long format with one row per residence and three required columns:
+  - Participant ID (links to the primary dataset)
+  - Move date (when the person started living at this location; format inferred
+    automatically — e.g. `2013`, `2013-06`, `March 2013`, `2013-06-15`)
+  - GEOID for that residence
+- The earliest-dated row per person is treated as their residence at survey
+  entry; dates earlier than a person's first recorded date resolve to NA.
 
 ## Troubleshooting
 
