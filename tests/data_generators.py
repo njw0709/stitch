@@ -79,6 +79,83 @@ def generate_fake_geoid(geoid_pool: List[str] = None) -> str:
     return f"{state:02d}{county:03d}{tract:06d}"
 
 
+def create_fake_heat_index_dir(
+    out_dir: Path,
+    years: range = range(2010, 2021),
+    n_geoids: int = 200,
+    seed: int = 42,
+    geoids: List[str] = None,
+) -> List[str]:
+    """
+    Generate small, clean synthetic heat-index data (one CSV per year).
+
+    This is a drop-in replacement for the very large real heat-index files.
+    Those files are ~1 GB each and, beyond being slow, triggered a native
+    segfault in pandas' pyarrow CSV date-parsing path. The generated files
+    share the same schema (``Date``, ``GEOID10``, ``index``) and naming
+    convention (``<year>_daily_heat_index.csv``) so downstream code is
+    unchanged.
+
+    Parameters
+    ----------
+    out_dir : Path
+        Directory to write the yearly CSV files into.
+    years : range
+        Years to generate (one file per year).
+    n_geoids : int
+        Number of unique random GEOIDs to generate (ignored when ``geoids`` is
+        provided).
+    seed : int
+        Seed for deterministic output.
+    geoids : List[str], optional
+        Explicit GEOIDs to use (e.g. taken from a survey dataset so the
+        synthetic heat data can actually link to it). When omitted, random
+        11-digit GEOIDs are generated.
+
+    Returns
+    -------
+    List[str]
+        The list of GEOIDs present in the generated data.
+    """
+    import pandas as pd
+
+    rng = np.random.default_rng(seed)
+
+    if geoids is not None:
+        geoids = [str(g) for g in dict.fromkeys(geoids)]
+    else:
+        # 11-digit GEOIDs with no leading zero, so CSV round-trips losslessly.
+        # Sample directly with integers() to avoid materializing the full range.
+        unique_geoids: set = set()
+        while len(unique_geoids) < n_geoids:
+            unique_geoids.update(
+                int(g)
+                for g in rng.integers(
+                    10_000_000_000,
+                    100_000_000_000,
+                    size=n_geoids - len(unique_geoids),
+                )
+            )
+        geoids = [str(g) for g in sorted(unique_geoids)]
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for year in years:
+        dates = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
+        n_rows = len(dates) * len(geoids)
+        df = pd.DataFrame(
+            {
+                "Date": np.repeat(dates.strftime("%Y-%m-%d"), len(geoids)),
+                "GEOID10": np.tile(geoids, len(dates)),
+                "index": rng.uniform(20.0, 100.0, size=n_rows),
+            }
+        )
+        df.to_csv(out_dir / f"{year}_daily_heat_index.csv", index=False)
+
+    return geoids
+
+
 def create_residential_history_data(
     n_people: int = 55, geoid_pool: List[str] = None
 ) -> List[dict]:

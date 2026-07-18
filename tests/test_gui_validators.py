@@ -95,17 +95,15 @@ class TestDateColumnValidator:
 class TestContextualDirectoryValidator:
     """Test contextual directory validation."""
 
-    def test_validate_contextual_directory_valid(self):
+    def test_validate_contextual_directory_valid(self, heat_index_dir):
         """Test with valid heat index directory."""
-        heat_dir = Path("tests/test_data/heat_index")
-        if heat_dir.exists():
-            is_valid, years, error_msg = validate_contextual_directory(
-                str(heat_dir), measure_type="heat_index"
-            )
-            assert is_valid is True
-            assert len(years) > 0
-            assert "2016" in years or "2017" in years  # At least one year
-            assert error_msg == ""
+        is_valid, years, error_msg = validate_contextual_directory(
+            str(heat_index_dir), measure_type="heat_index"
+        )
+        assert is_valid is True
+        assert len(years) > 0
+        assert "2016" in years or "2017" in years  # At least one year
+        assert error_msg == ""
 
     def test_validate_contextual_directory_no_files(self, tmp_path):
         """Test with directory containing no matching files."""
@@ -125,15 +123,13 @@ class TestContextualDirectoryValidator:
         assert len(years) == 0
         assert "not found" in error_msg.lower()
 
-    def test_validate_contextual_directory_with_extension(self):
+    def test_validate_contextual_directory_with_extension(self, heat_index_dir):
         """Test with specific file extension."""
-        heat_dir = Path("tests/test_data/heat_index")
-        if heat_dir.exists():
-            is_valid, years, error_msg = validate_contextual_directory(
-                str(heat_dir), measure_type="heat_index", file_extension=".csv"
-            )
-            assert is_valid is True
-            assert len(years) > 0
+        is_valid, years, error_msg = validate_contextual_directory(
+            str(heat_index_dir), measure_type="heat_index", file_extension=".csv"
+        )
+        assert is_valid is True
+        assert len(years) > 0
 
 
 class TestColumnConsistency:

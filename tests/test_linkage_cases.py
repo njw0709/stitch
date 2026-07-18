@@ -3,16 +3,14 @@ Linkage validation tests using actual test datasets.
 
 Tests different cases of linkage (with/without residential history,
 movers vs non-movers, batch vs parallel) using the CSV test data in
-``test_data/survey data/`` and ``test_data/heat_index/``.
+``test_data/survey data/`` plus small synthetic heat-index data generated
+on the fly (see the ``heat_data`` fixture).
 
-The end-to-end tests that load heat-index CSVs are gated behind a
-``heat_data`` fixture check because the current heat-index
-files contain malformed GEOIDs that trigger a segfault in pandas
-``normalize_geoid_for_processing``.  Those tests will be skipped
-automatically when the data cannot be loaded.
+The end-to-end tests build their heat-index data from the GEOIDs present in
+the survey/residential-history CSVs, so the synthetic contextual data links
+cleanly to the fixtures without depending on the (very large) real files.
 """
 
-import os
 import pytest
 import pandas as pd
 from pathlib import Path
@@ -20,19 +18,10 @@ from pathlib import Path
 from stitch.hrs import ResidentialHistoryHRS, HRSInterviewData, HRSContextLinker
 from stitch.daily_measure import DailyMeasureDataDir
 from stitch.process import process_multiple_lags_batch, process_multiple_lags_parallel
-
-_HEAT_INDEX_ENABLED = bool(os.environ.get("STITCH_TEST_HEAT_INDEX"))
-_HEAT_SKIP_REASON = (
-    "heat_index CSVs contain malformed GEOIDs that segfault pandas; "
-    "set STITCH_TEST_HEAT_INDEX=1 to enable when data is fixed"
-)
-requires_heat_index = pytest.mark.skipif(
-    not _HEAT_INDEX_ENABLED, reason=_HEAT_SKIP_REASON
-)
+from tests.data_generators import create_fake_heat_index_dir
 
 
 SURVEY_DATA_DIR = Path(__file__).parent / "test_data" / "survey data"
-HEAT_INDEX_DIR = Path(__file__).parent / "test_data" / "heat_index"
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────
@@ -49,9 +38,14 @@ def residential_history():
     )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def survey_with_reshist(residential_history):
-    """Load survey data linked to residential history."""
+    """Load survey data linked to residential history.
+
+    Function-scoped: the linkage pipeline mutates ``hrs_data.df`` in place
+    (adding lag date/GEOID columns), so each test needs a fresh instance to
+    stay isolated.
+    """
     return HRSInterviewData(
         SURVEY_DATA_DIR / "fake_survey_data.csv",
         datecol="iwdate",
@@ -62,9 +56,12 @@ def survey_with_reshist(residential_history):
     )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def survey_no_reshist():
-    """Load survey data with static GEOID (no residential history)."""
+    """Load survey data with static GEOID (no residential history).
+
+    Function-scoped for the same isolation reason as ``survey_with_reshist``.
+    """
     return HRSInterviewData(
         SURVEY_DATA_DIR / "fake_survey_data.csv",
         datecol="iwdate",
@@ -75,10 +72,36 @@ def survey_no_reshist():
 
 
 @pytest.fixture(scope="module")
-def heat_data():
-    """Load heat index contextual data directory."""
+def heat_index_csv_dir(tmp_path_factory):
+    """Generate small synthetic heat-index CSVs (once per module).
+
+    The GEOIDs are taken from the survey and residential-history CSVs (padded
+    to 11 digits) so the generated contextual data actually links to them.
+    """
+    geoids = set()
+    for fname, col in (
+        ("fake_survey_data.csv", "GEOID"),
+        ("fake_residential_history.csv", "GEOID"),
+    ):
+        df = pd.read_csv(SURVEY_DATA_DIR / fname)
+        geoids.update(df[col].dropna().astype("int64").astype(str).str.zfill(11))
+
+    heat_dir = tmp_path_factory.mktemp("heat_index")
+    create_fake_heat_index_dir(heat_dir, geoids=sorted(geoids))
+    return heat_dir
+
+
+@pytest.fixture()
+def heat_data(heat_index_csv_dir):
+    """Return a fresh ``DailyMeasureDataDir`` for each test.
+
+    ``process_multiple_lags_*`` mutate ``geoid_filter`` and populate an internal
+    year cache on the contextual dir, so a shared (module-scoped) instance would
+    leak state between tests. A function-scoped wrapper keeps the (cheap) CSV
+    generation shared while giving every test a clean object.
+    """
     return DailyMeasureDataDir(
-        HEAT_INDEX_DIR,
+        heat_index_csv_dir,
         data_col="index",
         measure_type=None,
     )
@@ -298,13 +321,8 @@ class TestNDayPriorColumns:
 # ── Linkage With Residential History (end-to-end) ────────────────────
 
 
-@requires_heat_index
 class TestLinkageWithResidentialHistory:
-    """End-to-end linkage tests with residential history.
-
-    Requires ``STITCH_TEST_HEAT_INDEX=1`` because the current heat-index
-    CSVs contain malformed GEOIDs that crash pandas.
-    """
+    """End-to-end linkage tests with residential history."""
 
     def test_batch_linkage_end_to_end(
         self, survey_with_reshist, heat_data, tmp_path
@@ -413,7 +431,6 @@ class TestLinkageWithResidentialHistory:
 # ── Linkage Without Residential History ──────────────────────────────
 
 
-@requires_heat_index
 class TestLinkageWithoutResidentialHistory:
     """Linkage using static GEOID (no residential history)."""
 
@@ -450,7 +467,6 @@ class TestLinkageWithoutResidentialHistory:
 # ── Final Linked Product Validation ──────────────────────────────────
 
 
-@requires_heat_index
 class TestFinalLinkedProductValidation:
     """Validate the structure and values of the final linked output."""
 
@@ -524,10 +540,12 @@ class TestFinalLinkedProductValidation:
     def test_mover_geoid_changes_across_large_lag(
         self, survey_with_reshist, heat_data, tmp_path
     ):
-        """For person 10000021 (moved March 2017, interview Nov 2018),
-        a 365-day lag reaches into the pre-move period, so the lagged
-        GEOID should differ from the interview-date GEOID."""
-        lags = [0, 365]
+        """Person 10000021 lived at 39057200900 from mid-2016, moved to
+        48113980000 in March 2017, and was interviewed 2 Nov 2018. A 730-day
+        lag reaches back to Nov 2016 (before the move), so the lagged GEOID
+        should be the pre-move residence and differ from the interview-date
+        GEOID."""
+        lags = [0, 730]
         temp_dir = tmp_path / "mover_geoid"
         temp_dir.mkdir()
 
@@ -547,13 +565,15 @@ class TestFinalLinkedProductValidation:
             merged = merged.merge(lag_df, on="personid", how="left")
 
         geoid_col_0 = "GEOID_0day_prior"
-        geoid_col_365 = "GEOID_365day_prior"
-        if geoid_col_0 in merged.columns and geoid_col_365 in merged.columns:
-            person = merged[merged["personid"] == 10000021]
-            if not person.empty:
-                g0 = str(person[geoid_col_0].iloc[0])
-                g365 = str(person[geoid_col_365].iloc[0])
-                assert g0 != g365, (
-                    f"Mover 10000021 should have different GEOIDs at "
-                    f"lag 0 ({g0}) vs lag 365 ({g365})"
-                )
+        geoid_col_730 = "GEOID_730day_prior"
+        assert geoid_col_0 in merged.columns and geoid_col_730 in merged.columns
+        person = merged[merged["personid"] == 10000021]
+        assert not person.empty
+        g0 = str(person[geoid_col_0].iloc[0])
+        g730 = str(person[geoid_col_730].iloc[0])
+        assert g0 == "48113980000", f"Lag-0 GEOID should be post-move, got {g0}"
+        assert g730 == "39057200900", f"Lag-730 GEOID should be pre-move, got {g730}"
+        assert g0 != g730, (
+            f"Mover 10000021 should have different GEOIDs at "
+            f"lag 0 ({g0}) vs lag 730 ({g730})"
+        )

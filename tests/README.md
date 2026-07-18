@@ -29,16 +29,18 @@ The test fixtures generate fake data that mimics the structure and patterns of r
 ## Data Structure
 
 ### Residential History Data
-Each person has multiple rows representing their residential history:
+Long format with one row per residence. The earliest-dated row per person is
+their residence at survey entry (no separate "first tract" marker):
 
 | Column | Description | Example Values |
 |--------|-------------|----------------|
 | `hhidpn` | Person ID | 10000001, 10000002, ... |
-| `trmove_tr` | Move indicator | 999.0 (first tract), "1. move" (moves) |
-| `mvyear` | Move year | 2012, 2015, 2018 (empty for first tract) |
-| `mvmonth` | Move month | 1-12 (empty for first tract) |
-| `GEOID2010` | Census tract GEOID | 11-digit zero-padded string |
-| `year` | Survey year | 2010 (empty for moves) |
+| `move_date` | Date the person began living at this location. Format is inferred per value to exercise `infer_datetime_series` | `2010-03-15` (full date), `2013-06` (year-month), `2015` (year-only) |
+| `GEOID` | Census tract GEOID | 11-digit zero-padded string |
+
+The generator (`data_generators.create_residential_history_data`) deliberately
+mixes full-date, year-month, and year-only representations across rows so the
+date-inference and midpoint-anchoring logic is covered by the fixtures.
 
 ### Survey Data
 Each person has one row with interview information:
@@ -112,8 +114,8 @@ df_survey.to_stata('tests/test_data/fake_survey_data.dta', write_index=False)
 The generated data includes realistic patterns:
 
 - **55 people total** with IDs 10000001-10000055
-- **~20 people with no moves** (only first tract from 2010)
-- **~20 people with 1 move** (first tract + one move between 2011-2019)
+- **~20 people with no moves** (only the 2010 survey-entry residence)
+- **~20 people with 1 move** (survey entry + one move between 2011-2019)
 - **~15 people with 2-4 moves** (multiple moves with chronological ordering)
 - **Interview dates** between 2015-2020
 - **Realistic GEOIDs** with proper 11-digit formatting

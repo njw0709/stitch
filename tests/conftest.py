@@ -18,6 +18,7 @@ from stitch.hrs import ResidentialHistoryHRS, HRSInterviewData
 from .data_generators import (
     create_residential_history_data,
     create_survey_data,
+    create_fake_heat_index_dir,
     get_real_geoids_sample,
 )
 import pandas as pd
@@ -31,9 +32,18 @@ def test_data_dir():
 
 
 @pytest.fixture(scope="session")
-def heat_index_dir(test_data_dir):
-    """Return path to real heat index data directory."""
-    return test_data_dir / "heat_index"
+def heat_index_dir(tmp_path_factory):
+    """
+    Generate a directory of small, clean synthetic heat-index CSV files.
+
+    This replaces the large real heat-index files (~1 GB each), which were slow
+    to read and triggered a native segfault in pandas' pyarrow CSV date-parsing
+    path. The generated data uses the same schema and file-naming convention, so
+    all downstream fixtures and tests work unchanged.
+    """
+    heat_dir = tmp_path_factory.mktemp("heat_index")
+    create_fake_heat_index_dir(heat_dir)
+    return heat_dir
 
 
 @pytest.fixture(scope="session")
