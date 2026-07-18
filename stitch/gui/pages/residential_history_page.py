@@ -54,15 +54,22 @@ class ResidentialHistoryPage(QWizardPage):
         self.res_hist_widget = QGroupBox("Residential History Configuration")
         res_hist_layout = QVBoxLayout()
 
-        # Description of the expected format
+        # Description of the expected format (details on hover)
         format_label = QLabel(
-            "Provide a table with one row per residence and three columns: a "
-            "participant ID, a move date, and a GEOID. The earliest entry per "
-            "person is used as their residence at survey entry. Move date "
-            "formats are inferred automatically (e.g. 2013, 2013-06, "
-            "March 2013, 2013-06-15)."
+            "One row per residence, with three columns: participant ID, move "
+            "date, and GEOID.  ⓘ"
         )
         format_label.setWordWrap(True)
+        format_label.setToolTip(
+            "The earliest date per person is their residence at survey entry.\n\n"
+            "Date formats are inferred automatically (e.g. 2013, 2013-06, "
+            "March 2013, 2013-06-15). When a date is coarser than the linkage "
+            "resolution, it is anchored to the midpoint of the period it "
+            "spans. If requested linkage is daily: 2013 (year) → 2013-07-02, "
+            "2013-06 (month) → 2013-06-15, 2013-06-15 (day) → 2013-06-15.\n\n"
+            "To mark an exit (stop linking after a date), add a row with that "
+            "date and no GEOID."
+        )
         res_hist_layout.addWidget(format_label)
 
         # File selection
