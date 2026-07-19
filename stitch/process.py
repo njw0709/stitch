@@ -1,6 +1,9 @@
 from pathlib import Path
 from typing import Optional, List, Union
 import argparse
+import shutil
+import tempfile
+import uuid
 import pandas as pd
 from tqdm import tqdm
 from .hrs import (
@@ -716,6 +719,35 @@ def _process_single_lag_internal(
         return None
 
 
+def _create_job_temp_dir(job_id: Optional[str] = None) -> Path:
+    """
+    Create a unique, private temporary directory for a single pipeline job.
+
+    The directory is created inside the operating system's temporary location
+    (``$TMPDIR`` / ``/tmp`` on Linux/macOS, ``%TEMP%`` on Windows) rather than
+    inside the user-visible save directory. This keeps the intermediate lag
+    files (which may contain confidential information) out of reach of casual
+    users and prevents concurrent jobs from colliding.
+
+    ``tempfile.mkdtemp`` is used because it is cross-platform and creates the
+    directory atomically with owner-only permissions (mode ``0o700``) on every
+    supported platform.
+
+    Parameters
+    ----------
+    job_id : str, optional
+        Identifier used to scope the temporary directory. If not provided, a
+        random identifier is generated so that each job gets its own directory.
+
+    Returns
+    -------
+    Path
+        Path to the newly created, job-scoped temporary directory.
+    """
+    job_id = job_id or uuid.uuid4().hex
+    return Path(tempfile.mkdtemp(prefix=f"stitch_{job_id}_"))
+
+
 def run_pipeline(args: argparse.Namespace):
     """
     Run the complete lagged contextual data linkage pipeline.
@@ -818,122 +850,131 @@ def run_pipeline(args: argparse.Namespace):
     )
 
     # Process lags (parallel or batch)
-    temp_dir = Path(args.save_dir) / "temp_lag_files"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Temporary lag files will be saved to: {temp_dir}")
+    # Use a unique, private system-temp directory per job so that (1) concurrent
+    # jobs never collide and (2) the intermediate lag files (which may contain
+    # confidential information) are kept out of the user-visible save directory
+    # and are guaranteed to be removed after the merge.
+    job_id = getattr(args, "job_id", None) or uuid.uuid4().hex
+    temp_dir = _create_job_temp_dir(job_id)
+    print(f"Temporary lag files will be saved to a private directory: {temp_dir}")
 
-    # Generate list of lags to process
-    lags_to_process = list(range(args.n_lags))
+    try:
+        # Generate list of lags to process
+        lags_to_process = list(range(args.n_lags))
 
-    if args.parallel:
-        print(f"Using parallel processing for {args.n_lags} lags")
-        temp_files = process_multiple_lags_parallel(
-            hrs_data=hrs_epi_data,
-            contextual_dir=contextual_data_all,
-            n_days=lags_to_process,
-            id_col=args.id_col,
-            temp_dir=temp_dir,
-            prefix=args.measure_type,
-            geoid_col=args.geoid_col,
-            include_lag_date=args.include_lag_date,
-            file_format="parquet",
-        )
-    else:
-        print(f"Using batch processing for {args.n_lags} lags")
-        temp_files = process_multiple_lags_batch(
-            hrs_data=hrs_epi_data,
-            contextual_dir=contextual_data_all,
-            n_days=lags_to_process,
-            id_col=args.id_col,
-            temp_dir=temp_dir,
-            prefix=args.measure_type,
-            geoid_col=args.geoid_col,
-            include_lag_date=args.include_lag_date,
-            file_format="parquet",
-        )
-
-    print(f"Finished processing {len(temp_files)} lag files")
-    # clean up
-    del contextual_data_all
-
-    # Merge all lag outputs
-    print(f"Merging {len(temp_files)} lag outputs with main HRS data...")
-    final_df = hrs_epi_data.df
-
-    # Filter files to current measure type (prefix) to avoid leftovers, then sort by lag
-    temp_files = [
-        f for f in temp_files if f.stem.startswith(f"{args.measure_type}_lag_")
-    ]
-    temp_files.sort(key=lambda f: int(f.stem.split("_lag_")[1]))
-
-    # Collect all “lag” columns to concatenate at once
-    lag_cols = []
-
-    for i, f in enumerate(temp_files):
-        if (i + 1) % 100 == 0:
-            print(f"  Processed {i + 1}/{len(temp_files)} files...")
-
-        lag_df = pd.read_parquet(f)
-
-        # --- Safety checks ---
-        # 1. Matching number of rows
-        if len(lag_df) != len(final_df):
-            raise ValueError(
-                f"Row count mismatch in lag file {f}: "
-                f"{len(lag_df)} rows vs {len(final_df)} in main df"
+        if args.parallel:
+            print(f"Using parallel processing for {args.n_lags} lags")
+            temp_files = process_multiple_lags_parallel(
+                hrs_data=hrs_epi_data,
+                contextual_dir=contextual_data_all,
+                n_days=lags_to_process,
+                id_col=args.id_col,
+                temp_dir=temp_dir,
+                prefix=args.measure_type,
+                geoid_col=args.geoid_col,
+                include_lag_date=args.include_lag_date,
+                file_format="parquet",
+            )
+        else:
+            print(f"Using batch processing for {args.n_lags} lags")
+            temp_files = process_multiple_lags_batch(
+                hrs_data=hrs_epi_data,
+                contextual_dir=contextual_data_all,
+                n_days=lags_to_process,
+                id_col=args.id_col,
+                temp_dir=temp_dir,
+                prefix=args.measure_type,
+                geoid_col=args.geoid_col,
+                include_lag_date=args.include_lag_date,
+                file_format="parquet",
             )
 
-        # 2. Same IDs AND same order
-        ids_left = final_df[args.id_col].values
-        ids_right = lag_df[args.id_col].values
+        print(f"Finished processing {len(temp_files)} lag files")
+        # clean up
+        del contextual_data_all
 
-        if not (ids_left == ids_right).all():
-            # To disambiguate, tell the user whether it's order mismatch or ID mismatch
-            if set(ids_left) != set(ids_right):
+        # Merge all lag outputs
+        print(f"Merging {len(temp_files)} lag outputs with main HRS data...")
+        final_df = hrs_epi_data.df
+
+        # Filter files to current measure type (prefix) to avoid leftovers, then sort by lag
+        temp_files = [
+            f for f in temp_files if f.stem.startswith(f"{args.measure_type}_lag_")
+        ]
+        temp_files.sort(key=lambda f: int(f.stem.split("_lag_")[1]))
+
+        # Collect all “lag” columns to concatenate at once
+        lag_cols = []
+
+        for i, f in enumerate(temp_files):
+            if (i + 1) % 100 == 0:
+                print(f"  Processed {i + 1}/{len(temp_files)} files...")
+
+            lag_df = pd.read_parquet(f)
+
+            # --- Safety checks ---
+            # 1. Matching number of rows
+            if len(lag_df) != len(final_df):
                 raise ValueError(
-                    f"ID set mismatch in lag file {f}: "
-                    "the lag file has different IDs than the main df"
-                )
-            else:
-                raise ValueError(
-                    f"ID order mismatch in lag file {f}: "
-                    "IDs match as a set but not row order"
+                    f"Row count mismatch in lag file {f}: "
+                    f"{len(lag_df)} rows vs {len(final_df)} in main df"
                 )
 
-        # --- End safety checks ---
+            # 2. Same IDs AND same order
+            ids_left = final_df[args.id_col].values
+            ids_right = lag_df[args.id_col].values
 
-        # Drop the id_col from the lag dataframe; we already have it in final_df
-        lag_df = lag_df.drop(columns=[args.id_col], errors="ignore")
+            if not (ids_left == ids_right).all():
+                # To disambiguate, tell the user whether it's order mismatch or ID mismatch
+                if set(ids_left) != set(ids_right):
+                    raise ValueError(
+                        f"ID set mismatch in lag file {f}: "
+                        "the lag file has different IDs than the main df"
+                    )
+                else:
+                    raise ValueError(
+                        f"ID order mismatch in lag file {f}: "
+                        "IDs match as a set but not row order"
+                    )
 
-        lag_cols.append(lag_df)
+            # --- End safety checks ---
 
-    # Now concatenate all collected columns at once horizontally
-    final_df = pd.concat(
-        [final_df.reset_index(drop=True)]
-        + [df.reset_index(drop=True) for df in lag_cols],
-        axis=1,
-    )
+            # Drop the id_col from the lag dataframe; we already have it in final_df
+            lag_df = lag_df.drop(columns=[args.id_col], errors="ignore")
 
-    # Apply final GEOID normalization based on user config
-    base_geoid = args.geoid_col
-    geoid_cols = [
-        c
-        for c in final_df.columns
-        if c == base_geoid
-        or (c.startswith(f"{base_geoid}_") and c.endswith("day_prior"))
-    ]
-    geoid_treatment = getattr(args, "geoid_treatment", "code")
-    geoid_n_digits = getattr(args, "geoid_n_digits", 11)
-    geoid_numeric_type = getattr(args, "geoid_numeric_type", "int")
-    final_df = convert_geoid_columns(
-        final_df,
-        geoid_cols,
-        treatment=geoid_treatment,
-        n_digits=geoid_n_digits,
-        numeric_type=geoid_numeric_type,
-    )
+            lag_cols.append(lag_df)
 
-    # Save final dataset (use centralized writer for dtype conversion/sanitation)
-    print(f"Saving final dataset to {out_path}")
-    write_data(final_df, out_path, index=False)
-    print("Done.")
+        # Now concatenate all collected columns at once horizontally
+        final_df = pd.concat(
+            [final_df.reset_index(drop=True)]
+            + [df.reset_index(drop=True) for df in lag_cols],
+            axis=1,
+        )
+
+        # Apply final GEOID normalization based on user config
+        base_geoid = args.geoid_col
+        geoid_cols = [
+            c
+            for c in final_df.columns
+            if c == base_geoid
+            or (c.startswith(f"{base_geoid}_") and c.endswith("day_prior"))
+        ]
+        geoid_treatment = getattr(args, "geoid_treatment", "code")
+        geoid_n_digits = getattr(args, "geoid_n_digits", 11)
+        geoid_numeric_type = getattr(args, "geoid_numeric_type", "int")
+        final_df = convert_geoid_columns(
+            final_df,
+            geoid_cols,
+            treatment=geoid_treatment,
+            n_digits=geoid_n_digits,
+            numeric_type=geoid_numeric_type,
+        )
+
+        # Save final dataset (use centralized writer for dtype conversion/sanitation)
+        print(f"Saving final dataset to {out_path}")
+        write_data(final_df, out_path, index=False)
+        print("Done.")
+    finally:
+        # Always remove the private temp directory (and any confidential lag
+        # files it holds), even if processing/merging/saving raised an error.
+        shutil.rmtree(temp_dir, ignore_errors=True)
