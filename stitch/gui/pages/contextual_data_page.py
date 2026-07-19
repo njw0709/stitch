@@ -378,6 +378,40 @@ class ContextualDataPage(QWizardPage):
         """Toggle a red error border on a widget."""
         widget.setStyleSheet(self.ERROR_STYLE if has_error else "")
 
+    def load_from_args(self, args):
+        """Restore this page's state from a previously built args namespace."""
+        measure = getattr(args, "measure_type", "") or ""
+        self.measure_type_edit.setText(measure)
+
+        # File extension: args stores None for "Auto-detect"
+        file_ext = getattr(args, "file_extension", None)
+        ext_text = file_ext if file_ext else "Auto-detect"
+        ext_index = self.file_ext_combo.findText(ext_text)
+        if ext_index >= 0:
+            self.file_ext_combo.setCurrentIndex(ext_index)
+
+        ctx_dir = getattr(args, "context_dir", "") or ""
+        if ctx_dir:
+            self.dir_picker.set_path(ctx_dir)
+            # Validate and populate the column combos synchronously.
+            self._on_load_preview_clicked()
+
+        # Restore multi-select data columns from the comma-separated value.
+        data_col = getattr(args, "data_col", "") or ""
+        self.data_col_list.clear()
+        for col in [c.strip() for c in data_col.split(",") if c.strip()]:
+            self.data_col_list.addItem(col)
+        self._update_data_col_field()
+
+        self._set_default_if_exists(
+            self.geoid_col_combo, getattr(args, "contextual_geoid_col", "") or ""
+        )
+        self._set_default_if_exists(
+            self.date_col_combo, getattr(args, "context_date_col", "") or ""
+        )
+
+        self.completeChanged.emit()
+
     def isComplete(self):
         """Keep the Next button interactive; validation runs in validatePage."""
         return True

@@ -19,7 +19,7 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import QApplication
 
-from stitch.gui.main_window import LinkageWizard
+from stitch.gui.main_window import StitchMainWindow
 
 
 def get_log_file():
@@ -62,9 +62,9 @@ def main():
         app.setApplicationName("STITCH Linkage Tool")
         app.setOrganizationName("STITCH Research")
 
-        # Create and show wizard
-        wizard = LinkageWizard()
-        wizard.show()
+        # Create and show the dashboard
+        window = StitchMainWindow()
+        window.show()
 
         # Run application
         sys.exit(app.exec())

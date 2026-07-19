@@ -494,6 +494,33 @@ class PipelineConfigPage(QWizardPage):
 
         self.summary_text.setText("\n".join(summary_lines))
 
+    def load_from_args(self, args):
+        """Restore this page's state from a previously built args namespace."""
+        self.n_lags_spin.setValue(int(getattr(args, "n_lags", 365) or 365))
+        self.parallel_checkbox.setChecked(bool(getattr(args, "parallel", True)))
+        self.include_lag_date_checkbox.setChecked(
+            bool(getattr(args, "include_lag_date", False))
+        )
+
+        save_dir = getattr(args, "save_dir", "") or ""
+        if save_dir:
+            self.save_dir_picker.set_path(save_dir)
+        self.output_name_edit.setText(getattr(args, "output_name", "") or "")
+
+        # GEOID treatment
+        treatment = getattr(args, "geoid_treatment", "code") or "code"
+        self.treatment_combo.setCurrentIndex(0 if treatment == "code" else 1)
+
+        n_digits = int(getattr(args, "geoid_n_digits", 11) or 0)
+        if n_digits > 0:
+            self.zero_pad_checkbox.setChecked(True)
+            self.n_digits_spin.setValue(n_digits)
+        else:
+            self.zero_pad_checkbox.setChecked(False)
+
+        numeric_type = getattr(args, "geoid_numeric_type", "int") or "int"
+        self.numeric_type_combo.setCurrentIndex(0 if numeric_type == "int" else 1)
+
     def isComplete(self):
         """Check if the page is complete."""
         if not self.save_dir_picker.get_path():

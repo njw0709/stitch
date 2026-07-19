@@ -229,6 +229,28 @@ class ResidentialHistoryPage(QWizardPage):
         if index >= 0:
             combo.setCurrentIndex(index)
 
+    def load_from_args(self, args):
+        """Restore this page's state from a previously built args namespace."""
+        res_path = getattr(args, "residential_hist", None)
+        if res_path:
+            self.use_res_hist_checkbox.setChecked(True)
+            # Setting the path emits fileSelected, which loads the preview and
+            # populates the column combos synchronously.
+            self.file_picker.set_path(res_path)
+            self._set_default_if_exists(
+                self.id_combo, getattr(args, "res_hist_id_col", "") or ""
+            )
+            self._set_default_if_exists(
+                self.date_combo, getattr(args, "res_hist_date_col", "") or ""
+            )
+            self._set_default_if_exists(
+                self.geoid_combo, getattr(args, "res_hist_geoid_col", "") or ""
+            )
+        else:
+            self.use_res_hist_checkbox.setChecked(False)
+
+        self.completeChanged.emit()
+
     def isComplete(self):
         """Check if the page is complete."""
         # If not using residential history, page is complete

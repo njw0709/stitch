@@ -182,6 +182,25 @@ class HRSDataPage(QWizardPage):
 
         self.completeChanged.emit()
 
+    def load_from_args(self, args):
+        """Restore this page's state from a previously built args namespace."""
+        path = getattr(args, "survey_data", "") or ""
+        if path:
+            # Setting the path emits fileSelected, which loads the preview and
+            # populates the column combos synchronously.
+            self.file_picker.set_path(path)
+
+        for combo, value in (
+            (self.date_column_combo, getattr(args, "date_col", "")),
+            (self.id_col_combo, getattr(args, "id_col", "")),
+            (self.geoid_col_combo, getattr(args, "geoid_col", "")),
+        ):
+            index = combo.findText(value or "")
+            if index >= 0:
+                combo.setCurrentIndex(index)
+
+        self.completeChanged.emit()
+
     def isComplete(self):
         """Check if the page is complete."""
         # Must have valid file and date column selected

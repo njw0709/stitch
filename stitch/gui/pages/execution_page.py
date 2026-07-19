@@ -1,28 +1,40 @@
 """
-Pipeline execution page.
+Sequential pipeline execution.
+
+Execution is driven by a single :class:`QueueRunner` worker that runs every
+queued job one after another inside one long-lived ``QThread``. The
+:class:`ExecutionDialog` is a modal window that owns that thread, shows the live
+log/progress, and reports each job's status back to the dashboard via
+:attr:`ExecutionDialog.job_status_changed`.
+
+Running the whole queue in a single thread (rather than one thread per job)
+keeps the thread lifecycle trivial: it is created when the dialog opens and torn
+down once, when the queue finishes.
 """
 
-import argparse
 import contextlib
 import io
-from pathlib import Path
 import re
 
 from PyQt6.QtWidgets import (
-    QWizardPage,
+    QDialog,
     QVBoxLayout,
+    QHBoxLayout,
     QPushButton,
     QTextEdit,
     QProgressBar,
     QLabel,
-    QHBoxLayout,
     QMessageBox,
-    QWizard,
+    QFileDialog,
 )
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from stitch.process import run_pipeline
+from stitch.gui.job import (
+    STATUS_RUNNING,
+    STATUS_DONE,
+    STATUS_FAILED,
+)
 
 
 # Regex to remove most emoji code points while preserving non-emoji Unicode
@@ -53,7 +65,7 @@ def remove_emojis(text: str) -> str:
 
 
 class EmittingStream(io.StringIO):
-    """Custom stream that emits signals on write."""
+    """Custom stream that emits a Qt signal on each non-empty write."""
 
     def __init__(self, signal):
         super().__init__()
@@ -67,249 +79,169 @@ class EmittingStream(io.StringIO):
         pass
 
 
-class PipelineWorker(QObject):
-    """Worker for running the pipeline in a separate thread."""
+class QueueRunner(QObject):
+    """Runs a list of jobs sequentially inside a single worker thread.
 
+    ``run_items`` is a list of ``(row, Job)`` tuples, where ``row`` is the job's
+    index in the dashboard's list (used to report status back).
+    """
+
+    job_started = pyqtSignal(int)  # row
     output = pyqtSignal(str)
-    finished_signal = pyqtSignal(bool, str)
+    job_finished = pyqtSignal(int, bool, str)  # row, success, message
+    finished = pyqtSignal()
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, run_items):
         super().__init__()
-        self.args = args
+        self._run_items = list(run_items)
 
     def run(self):
-        """Execute the pipeline with localized stdout/stderr redirection."""
+        """Execute each job in order, redirecting its stdout/stderr to the log."""
         stream = EmittingStream(self.output)
 
-        try:
-            with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-                self.output.emit("Starting pipeline execution...")
-                self.output.emit(f"HRS data: {self.args.survey_data}")
-                self.output.emit(f"Context directory: {self.args.context_dir}")
-                self.output.emit(
-                    f"Output: {self.args.save_dir}/{self.args.output_name}"
-                )
-                self.output.emit(f"Number of lags: {self.args.n_lags}")
-                self.output.emit(
-                    f"Processing mode: {'Parallel' if self.args.parallel else 'Batch'}"
-                )
-                self.output.emit("")
+        for row, job in self._run_items:
+            self.job_started.emit(row)
+            try:
+                with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(
+                    stream
+                ):
+                    self.output.emit("")
+                    self.output.emit(f"=== {job.name} ===")
+                    self.output.emit(f"HRS data: {job.args.survey_data}")
+                    self.output.emit(f"Context directory: {job.args.context_dir}")
+                    self.output.emit(
+                        f"Output: {job.args.save_dir}/{job.args.output_name}"
+                    )
+                    self.output.emit(f"Number of lags: {job.args.n_lags}")
+                    self.output.emit("")
 
-                run_pipeline(self.args)
+                    run_pipeline(job.args)
 
-            self.finished_signal.emit(True, "Pipeline completed successfully!")
+                self.job_finished.emit(row, True, "Pipeline completed successfully!")
 
-        except Exception as e:
-            self.finished_signal.emit(False, f"Error running pipeline: {str(e)}")
+            except Exception as e:  # noqa: BLE001 - surface any pipeline error
+                self.job_finished.emit(row, False, f"Error running pipeline: {str(e)}")
+
+        self.finished.emit()
 
 
-class ExecutionPage(QWizardPage):
+class ExecutionDialog(QDialog):
     """
-    Wizard page for executing the pipeline.
+    Modal dialog that runs all queued jobs sequentially in one worker thread.
+
+    While open it blocks the dashboard, and reports each job's status transition
+    (running/done/failed) through :attr:`job_status_changed` so the dashboard can
+    recolor its list rows live.
     """
 
-    def __init__(self, parent=None):
+    #: Emitted with (row, status) as each job starts/finishes.
+    job_status_changed = pyqtSignal(int, str)
+
+    def __init__(self, run_items, parent=None):
         super().__init__(parent)
-        self.setTitle("Run Pipeline")
-        self.setSubTitle("Execute the linkage pipeline with your configured settings.")
+        self.setWindowTitle("Running Jobs")
+        self.setModal(True)
+        self.resize(750, 550)
+
+        self._run_items = list(run_items)
+        self._total = len(self._run_items)
+        self._completed = 0
+        self._succeeded = 0
+        self._failed = 0
+        self._finished = False
 
         self.thread = None
         self.worker = None
-        self.pipeline_running = False
-        self.pipeline_completed = False
 
-        # Create layout
-        layout = QVBoxLayout()
+        layout = QVBoxLayout(self)
 
-        # Instructions
-        instructions = QLabel(
-            "Click 'Run Pipeline' to start the linkage process. "
-            "This may take a while depending on the number of lags and data size."
-        )
-        instructions.setWordWrap(True)
-        layout.addWidget(instructions)
-
-        # Control buttons
-        button_layout = QHBoxLayout()
-
-        self.run_button = QPushButton("Run Pipeline")
-        self.run_button.setStyleSheet(
-            "background-color: #4CAF50; color: white; font-weight: bold;"
-        )
-        self.run_button.clicked.connect(self._run_pipeline)
-        button_layout.addWidget(self.run_button)
-
-        self.save_log_button = QPushButton("Save Log")
-        self.save_log_button.clicked.connect(self._save_log)
-        self.save_log_button.setEnabled(False)
-        button_layout.addWidget(self.save_log_button)
-
-        self.open_output_button = QPushButton("Open Output Directory")
-        self.open_output_button.clicked.connect(self._open_output_directory)
-        self.open_output_button.setEnabled(False)
-        button_layout.addWidget(self.open_output_button)
-
-        button_layout.addStretch()
-        layout.addLayout(button_layout)
-
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)  # Indeterminate
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
-
-        # Status label
-        self.status_label = QLabel("Ready to run.")
+        self.status_label = QLabel("Preparing to run...")
         layout.addWidget(self.status_label)
 
-        # Output log
-        output_label = QLabel("Pipeline Output:")
-        layout.addWidget(output_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, self._total)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
 
+        layout.addWidget(QLabel("Pipeline Output:"))
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
         self.output_text.setFontFamily("Monospace")
         layout.addWidget(self.output_text)
 
-        self.setLayout(layout)
+        button_layout = QHBoxLayout()
+        self.save_log_button = QPushButton("Save Log")
+        self.save_log_button.clicked.connect(self._save_log)
+        button_layout.addWidget(self.save_log_button)
 
-    def _build_args(self) -> argparse.Namespace:
-        """Build pipeline arguments from wizard fields."""
-        wizard = self.wizard()
-        if not wizard:
-            return argparse.Namespace()
+        button_layout.addStretch()
 
-        # Build arguments namespace
-        args = argparse.Namespace(
-            survey_data=wizard.field("hrs_data_path"),
-            context_dir=wizard.field("context_dir"),
-            output_name=wizard.field("output_name"),
-            id_col=wizard.field("id_col"),
-            date_col=wizard.field("date_col"),
-            measure_type=wizard.field("measure_type"),
-            save_dir=wizard.field("save_dir"),
-            data_col=wizard.field("data_col"),
-            geoid_col=wizard.field("geoid_col"),
-            contextual_geoid_col=wizard.field("contextual_geoid_col"),
-            context_date_col=wizard.field("context_date_col"),
-            n_lags=wizard.field("n_lags"),
-            parallel=wizard.field("parallel"),
-            include_lag_date=wizard.field("include_lag_date"),
-        )
+        self.close_button = QPushButton("Close")
+        self.close_button.clicked.connect(self.accept)
+        self.close_button.setEnabled(False)
+        button_layout.addWidget(self.close_button)
 
-        # Optional: file extension
-        file_ext = wizard.field("file_extension")
-        args.file_extension = file_ext if file_ext != "Auto-detect" else None
+        layout.addLayout(button_layout)
 
-        # GEOID normalization config
-        args.geoid_treatment = wizard.field("geoid_treatment") or "code"
-        zero_pad = wizard.field("geoid_zero_pad")
-        if zero_pad:
-            args.geoid_n_digits = int(wizard.field("geoid_n_digits") or 11)
-        else:
-            args.geoid_n_digits = 0
-        args.geoid_numeric_type = wizard.field("geoid_numeric_type") or "int"
+    # ------------------------------------------------------------------
+    # Execution lifecycle
+    # ------------------------------------------------------------------
 
-        # Optional: residential history
-        if wizard.field("use_residential_hist"):
-            args.residential_hist = wizard.field("residential_hist_path")
-            args.res_hist_id_col = wizard.field("res_hist_id_col")
-            args.res_hist_date_col = wizard.field("res_hist_date_col")
-            args.res_hist_geoid_col = wizard.field("res_hist_geoid_col")
-        else:
-            args.residential_hist = None
+    def start(self):
+        """Create the worker thread and begin running the queue."""
+        self.status_label.setText(f"Running {self._total} job(s)...")
 
-        return args
-
-    def _run_pipeline(self):
-        """Start the pipeline execution."""
-        if self.pipeline_running:
-            return
-
-        # Build arguments
-        args = self._build_args()
-
-        # Show configuration in output
-        self.output_text.clear()
-        self.output_text.append("=== Pipeline Configuration ===")
-
-        # Disable Run and Back while running
-        self.pipeline_running = True
-        self.pipeline_completed = False
-        self.run_button.setEnabled(False)
-        self._set_back_button_enabled(False)
-        self.progress_bar.setVisible(True)
-        self.status_label.setText("Running pipeline...")
-
-        # Create thread and worker using moveToThread pattern
-        self.thread = QThread()
-        self.worker = PipelineWorker(args)
+        self.thread = QThread(self)
+        self.worker = QueueRunner(self._run_items)
         self.worker.moveToThread(self.thread)
 
         self.thread.started.connect(self.worker.run)
+        self.worker.job_started.connect(self._on_job_started)
         self.worker.output.connect(self._on_output)
-        self.worker.finished_signal.connect(self._on_finished)
-        self.worker.finished_signal.connect(self.thread.quit)
-        self.worker.finished_signal.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self._on_thread_finished)
+        self.worker.job_finished.connect(self._on_job_finished)
+        self.worker.finished.connect(self._on_all_finished)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
 
         self.thread.start()
 
-    def _set_back_button_enabled(self, enabled: bool):
-        """Enable or disable the wizard Back button."""
-        wizard = self.wizard()
-        if wizard:
-            wizard.button(QWizard.WizardButton.BackButton).setEnabled(enabled)
+    def is_finished(self) -> bool:
+        """True once the whole queue has finished running."""
+        return self._finished
+
+    def _on_job_started(self, row: int):
+        self.job_status_changed.emit(row, STATUS_RUNNING)
 
     def _on_output(self, line: str):
-        """Handle output from pipeline."""
         self.output_text.append(line)
-
-        # Auto-scroll to bottom
         scrollbar = self.output_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
-    def _on_finished(self, success: bool, message: str):
-        """Handle pipeline completion."""
-        self.pipeline_running = False
-        self.pipeline_completed = success
-
-        self.run_button.setEnabled(True)
-        self._set_back_button_enabled(True)
-        self.progress_bar.setVisible(False)
-        self.save_log_button.setEnabled(True)
-
+    def _on_job_finished(self, row: int, success: bool, message: str):
+        self._completed += 1
         if success:
-            self.status_label.setText(f"✓ {message}")
-            self.open_output_button.setEnabled(True)
-            QMessageBox.information(self, "Success", message)
+            self._succeeded += 1
         else:
-            self.status_label.setText(f"✗ {message}")
-            QMessageBox.critical(self, "Error", message)
+            self._failed += 1
+            self.output_text.append(f"[FAILED] {message}")
+        self.progress_bar.setValue(self._completed)
+        self.job_status_changed.emit(row, STATUS_DONE if success else STATUS_FAILED)
 
-        self.completeChanged.emit()
+    def _on_all_finished(self):
+        self._finished = True
+        summary = (
+            f"Queue finished: {self._succeeded} succeeded, {self._failed} failed."
+        )
+        self.status_label.setText(summary)
+        self.close_button.setEnabled(True)
 
-    def _on_thread_finished(self):
-        """Release thread/worker references only after Qt thread has stopped."""
-        self.worker = None
-        self.thread = None
-
-    def stop_pipeline_thread(self, wait_ms: int = 5000) -> bool:
-        """Request worker thread shutdown and wait for completion."""
-        thread = self.thread
-        if thread is None:
-            return True
-
-        if thread.isRunning():
-            thread.quit()
-            return thread.wait(wait_ms)
-        return True
+    # ------------------------------------------------------------------
+    # Log saving / closing
+    # ------------------------------------------------------------------
 
     def _save_log(self):
         """Save the output log to a file."""
-        from PyQt6.QtWidgets import QFileDialog
-
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Log File",
@@ -319,24 +251,31 @@ class ExecutionPage(QWizardPage):
 
         if file_path:
             try:
-                text = self.output_text.toPlainText()
-                text = remove_emojis(text)
+                text = remove_emojis(self.output_text.toPlainText())
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(text)
                 QMessageBox.information(self, "Saved", f"Log saved to {file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save log: {str(e)}")
 
-    def _open_output_directory(self):
-        """Open the output directory in file explorer."""
-        wizard = self.wizard()
-        if not wizard:
+    def closeEvent(self, event):
+        """Block closing until the queue has finished."""
+        if not self._finished:
+            event.ignore()
             return
+        self._shutdown_thread()
+        super().closeEvent(event)
 
-        save_dir = wizard.field("save_dir")
-        if save_dir and Path(save_dir).exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(save_dir))
+    def reject(self):
+        """Ignore Escape/close attempts while the queue is still running."""
+        if not self._finished:
+            return
+        self._shutdown_thread()
+        super().reject()
 
-    def isComplete(self):
-        """Page is complete when pipeline has finished successfully."""
-        return self.pipeline_completed
+    def _shutdown_thread(self, wait_ms: int = 5000):
+        """Ensure the worker thread is fully stopped before the dialog closes."""
+        thread = self.thread
+        if thread is not None and thread.isRunning():
+            thread.quit()
+            thread.wait(wait_ms)
