@@ -30,6 +30,10 @@ Download the pre-built standalone application for your platform:
 - **macOS/Linux**: `~/.stitch.log`
 - **Windows**: `C:\Users\YourUsername\.stitch.log`
 
+(When running from source instead of the standalone app, the default log file is
+`~/.STITCH-linkage-tool.log`. In either case you can override the location by
+setting the `STITCH_LOG_FILE` environment variable.)
+
 ### Build from Source
 
 If you prefer to run from source or need the CLI:
@@ -194,7 +198,7 @@ Handles temporal/geographic alignment between survey and contextual data, includ
 
 ## Examples
 
-### Example 1: Heat Index Linkage (365 days)
+### Example 1: Heat Index Linkage (0–364 days prior)
 
 ```bash
 python stitch_cli.py \
@@ -206,12 +210,16 @@ python stitch_cli.py \
     --date-col iwdate \
     --geoid-col GEOID2010 \
     --contextual-geoid-col GEOID10 \
+    --start-lag 0 \
     --n-lags 365 \
     --save-dir "output/heat" \
     --parallel
 ```
 
-### Example 2: PM2.5 with Residential History
+### Example 2: PM2.5 with Residential History (30–729 days prior)
+
+This example skips the most recent 30 days by starting the lag window at day 30,
+processing lags 30 through 729 days prior.
 
 ```bash
 python stitch_cli.py \
@@ -223,6 +231,7 @@ python stitch_cli.py \
     --date-col iwdate \
     --geoid-col GEOID2010 \
     --contextual-geoid-col GEOID10 \
+    --start-lag 30 \
     --n-lags 730 \
     --save-dir "output/pm25" \
     --parallel
