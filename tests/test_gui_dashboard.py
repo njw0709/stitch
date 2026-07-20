@@ -651,3 +651,111 @@ def test_stop_cancels_current_job_and_leaves_rest_pending(qtbot, tmp_path, monke
     # Dialog reflects the stopped state and can be closed.
     assert dialog.close_button.isEnabled() is True
     assert dialog.stop_button.isEnabled() is False
+
+
+def test_stop_midrun_then_rerun_resumes_in_gui(
+    qtbot,
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+    monkeypatch,
+):
+    """End-to-end GUI resume: Stop a real run mid-processing, then Run All again
+    resumes into the same temp dir and only reprocesses the unfinished lags.
+    """
+    import tempfile
+    import time
+    from pathlib import Path
+
+    import stitch.process
+
+    # Isolate the OS temp location so we can watch this job's lag files and so
+    # discovery/cleanup can't be perturbed by unrelated stitch_* dirs.
+    temp_root = tmp_path / "ostemp"
+    temp_root.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    # Slow down each lag write while `slow["on"]`, so the Stop click reliably
+    # lands after at least one lag file exists but before the job finishes.
+    slow = {"on": True}
+    real_write_data = stitch.process.write_data
+
+    def slow_write_data(*args, **kwargs):
+        result = real_write_data(*args, **kwargs)
+        if slow["on"]:
+            time.sleep(0.2)
+        return result
+
+    monkeypatch.setattr(stitch.process, "write_data", slow_write_data)
+
+    # Count job temp dirs created so we can prove the rerun reused (didn't recreate).
+    create_calls = []
+    real_create = stitch.process._create_job_temp_dir
+
+    def spy_create(job_id=None):
+        path = real_create(job_id)
+        create_calls.append(path)
+        return path
+
+    monkeypatch.setattr(stitch.process, "_create_job_temp_dir", spy_create)
+
+    window = StitchMainWindow()
+    qtbot.addWidget(window)
+
+    args = _make_job_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+        output_name="resumed.dta",
+        n_lags=3,
+        parallel=False,
+    )
+    _add_job_via_ui(window, args, monkeypatch)
+
+    def partial_lag_files():
+        return sorted(Path(tempfile.gettempdir()).glob("stitch_*/heat_lag_*.parquet"))
+
+    # --- First run: start, wait for a lag file to land, then Stop mid-run. ---
+    run_items = [(i, job) for i, job in enumerate(window.jobs)]
+    dialog = ExecutionDialog(run_items, window)
+    dialog.job_status_changed.connect(window._on_job_status_changed)
+    qtbot.addWidget(dialog)
+    dialog.start()
+
+    qtbot.waitUntil(lambda: len(partial_lag_files()) >= 1, timeout=30000)
+    dialog._on_stop_clicked()
+    qtbot.waitUntil(dialog.is_finished, timeout=30000)
+    window._refresh_buttons()
+
+    # The job was stopped mid-run -> returned to Pending, output not yet written.
+    assert dialog._cancelled == 1
+    assert window.jobs[0].status == STATUS_PENDING
+    assert not (save_dir / "resumed.dta").exists()
+
+    # Exactly one temp dir was created and it survives with a partial lag set.
+    assert len(create_calls) == 1
+    temp_dir = create_calls[0]
+    assert temp_dir.exists()
+    done_before = sorted(temp_dir.glob("heat_lag_*.parquet"))
+    assert 1 <= len(done_before) < args.n_lags
+
+    # --- Second run: no artificial slowdown; Run All resumes and completes. ---
+    slow["on"] = False
+    creates_after_first = len(create_calls)
+
+    dialog2 = _run_pending_via_dialog(window, qtbot)
+
+    # The rerun succeeded, reused the same temp dir (no new one created), and the
+    # completed job cleaned up its temp dir.
+    assert dialog2._succeeded == 1
+    assert dialog2._failed == 0
+    assert window.jobs[0].status == STATUS_DONE
+    assert _item_bg(window, 0) == STATUS_COLORS[STATUS_DONE][0].lower()
+    assert (save_dir / "resumed.dta").exists()
+    assert len(create_calls) == creates_after_first  # reused, not recreated
+    assert not temp_dir.exists()

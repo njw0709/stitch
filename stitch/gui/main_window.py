@@ -28,6 +28,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QDesktopServices, QColor, QBrush
 
+from stitch.process import cleanup_stitch_temp_dirs
+
 from .pages.hrs_data_page import HRSDataPage
 from .pages.residential_history_page import ResidentialHistoryPage
 from .pages.contextual_data_page import ContextualDataPage
@@ -211,6 +213,10 @@ class StitchMainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.setStyleSheet(_STYLE)
 
+        # Wipe any leftover job temp dirs from a previously crashed/force-killed
+        # session so confidential lag files never build up across runs.
+        cleanup_stitch_temp_dirs()
+
         self._refresh_buttons()
 
     # ------------------------------------------------------------------
@@ -374,5 +380,8 @@ class StitchMainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Close the window and quit the application."""
+        # Remove any leftover (incomplete) job temp dirs on quit so no
+        # confidential intermediate lag files persist between sessions.
+        cleanup_stitch_temp_dirs()
         super().closeEvent(event)
         QApplication.quit()

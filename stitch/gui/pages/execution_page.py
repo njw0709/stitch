@@ -15,6 +15,8 @@ down once, when the queue finishes.
 import contextlib
 import io
 import re
+from datetime import datetime
+from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -66,15 +68,23 @@ def remove_emojis(text: str) -> str:
 
 
 class EmittingStream(io.StringIO):
-    """Custom stream that emits a Qt signal on each non-empty write."""
+    """Custom stream that emits a Qt signal on each non-empty write.
 
-    def __init__(self, signal):
+    An optional *buffer* list, when set, also receives every emitted line so
+    the captured output can be persisted (e.g. auto-saved on job failure).
+    """
+
+    def __init__(self, signal, buffer=None):
         super().__init__()
         self.signal = signal
+        self.buffer = buffer
 
     def write(self, text):
         if text.strip():
-            self.signal.emit(text.rstrip())
+            line = text.rstrip()
+            if self.buffer is not None:
+                self.buffer.append(line)
+            self.signal.emit(line)
 
     def flush(self):
         pass
@@ -99,7 +109,14 @@ class QueueRunner(QObject):
 
     def run(self):
         """Execute each job in order, redirecting its stdout/stderr to the log."""
-        stream = EmittingStream(self.output)
+        # Per-job buffer of emitted lines; enables auto-saving the log on failure.
+        job_lines: list[str] = []
+        stream = EmittingStream(self.output, buffer=job_lines)
+
+        def emit(line: str) -> None:
+            """Emit a line to the live log and record it in the job buffer."""
+            job_lines.append(line)
+            self.output.emit(line)
 
         # Poll this thread's Qt interruption flag; it is set from the GUI thread
         # via ``QThread.requestInterruption()`` and is safe to read while the
@@ -113,20 +130,19 @@ class QueueRunner(QObject):
             if should_cancel():
                 break
 
+            job_lines.clear()
             self.job_started.emit(row)
             try:
                 with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(
                     stream
                 ):
-                    self.output.emit("")
-                    self.output.emit(f"=== {job.name} ===")
-                    self.output.emit(f"HRS data: {job.args.survey_data}")
-                    self.output.emit(f"Context directory: {job.args.context_dir}")
-                    self.output.emit(
-                        f"Output: {job.args.save_dir}/{job.args.output_name}"
-                    )
-                    self.output.emit(f"Number of lags: {job.args.n_lags}")
-                    self.output.emit("")
+                    emit("")
+                    emit(f"=== {job.name} ===")
+                    emit(f"HRS data: {job.args.survey_data}")
+                    emit(f"Context directory: {job.args.context_dir}")
+                    emit(f"Output: {job.args.save_dir}/{job.args.output_name}")
+                    emit(f"Number of lags: {job.args.n_lags}")
+                    emit("")
 
                     run_pipeline(job.args, should_cancel=should_cancel)
 
@@ -135,14 +151,37 @@ class QueueRunner(QObject):
             except PipelineCancelled:
                 # Current job was stopped mid-run: report it as cancelled (the
                 # dashboard resets it to pending) and stop processing the queue.
-                self.output.emit(f"[STOPPED] {job.name} was stopped by the user.")
+                emit(f"[STOPPED] {job.name} was stopped by the user.")
                 self.job_cancelled.emit(row)
                 break
 
             except Exception as e:  # noqa: BLE001 - surface any pipeline error
+                emit(f"Error running pipeline: {str(e)}")
+                log_path = self._save_failure_log(job, job_lines)
+                if log_path is not None:
+                    emit(f"[LOG SAVED] Failure log written to {log_path}")
                 self.job_finished.emit(row, False, f"Error running pipeline: {str(e)}")
 
         self.finished.emit()
+
+    @staticmethod
+    def _save_failure_log(job, lines) -> "Path | None":
+        """Write the captured log for a failed *job* into its save directory.
+
+        Returns the path written, or ``None`` if the log could not be saved
+        (never raises, so a logging failure can't mask the pipeline error).
+        """
+        try:
+            save_dir = Path(job.args.save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            stem = Path(job.args.output_name).stem or "job"
+            log_path = save_dir / f"{stem}_{timestamp}_error_log.txt"
+            text = remove_emojis("\n".join(lines))
+            log_path.write_text(text, encoding="utf-8")
+            return log_path
+        except Exception:  # noqa: BLE001 - logging must never mask the real error
+            return None
 
 
 class ExecutionDialog(QDialog):

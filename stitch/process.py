@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Optional, List, Union, Callable
 import argparse
+import hashlib
+import json
 import shutil
 import tempfile
 import uuid
@@ -746,6 +748,14 @@ def _process_single_lag_internal(
         return None
 
 
+#: Basename of the job-args manifest written into every job temp directory.
+JOB_ARGS_FILENAME = "job_args.json"
+
+#: Keys that do not describe the linkage configuration and must be excluded
+#: from the job signature so they never affect resume matching.
+_SIGNATURE_EXCLUDED_KEYS = frozenset({"job_id"})
+
+
 def _create_job_temp_dir(job_id: Optional[str] = None) -> Path:
     """
     Create a unique, private temporary directory for a single pipeline job.
@@ -773,6 +783,98 @@ def _create_job_temp_dir(job_id: Optional[str] = None) -> Path:
     """
     job_id = job_id or uuid.uuid4().hex
     return Path(tempfile.mkdtemp(prefix=f"stitch_{job_id}_"))
+
+
+def _job_args_to_dict(args: argparse.Namespace) -> dict:
+    """Return the linkage-configuration fields of *args* as a plain dict.
+
+    Volatile keys (see :data:`_SIGNATURE_EXCLUDED_KEYS`) are dropped so they do
+    not influence the job signature. Values are left as-is; JSON serialization
+    coerces non-primitive values (e.g. ``Path``) via ``default=str``.
+    """
+    return {
+        k: v
+        for k, v in vars(args).items()
+        if k not in _SIGNATURE_EXCLUDED_KEYS
+    }
+
+
+def _job_signature(args: argparse.Namespace) -> str:
+    """Compute a stable content hash identifying a job's configuration.
+
+    Two jobs with identical configuration produce the same signature, which is
+    what lets a new run discover and resume a previous job's partially
+    populated temp directory.
+    """
+    canonical = json.dumps(_job_args_to_dict(args), sort_keys=True, default=str)
+    return hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _write_job_args(
+    temp_dir: Path, args: argparse.Namespace, signature_hash: str
+) -> None:
+    """Write the job-args manifest into *temp_dir* (idempotent).
+
+    The manifest records the job signature and the full configuration so a
+    later run can confirm an exact match before resuming into this directory.
+    Existing manifests are left untouched (a resumed run keeps the original).
+    """
+    manifest_path = temp_dir / JOB_ARGS_FILENAME
+    if manifest_path.exists():
+        return
+    payload = {
+        "signature_hash": signature_hash,
+        "args": _job_args_to_dict(args),
+        "n_lags": getattr(args, "n_lags", None),
+    }
+    manifest_path.write_text(
+        json.dumps(payload, sort_keys=True, default=str, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _find_resumable_temp_dir(
+    args: argparse.Namespace, signature_hash: Optional[str] = None
+) -> Optional[Path]:
+    """Find a previous job temp dir whose configuration matches *args*.
+
+    Scans the OS temp location for ``stitch_*`` directories and returns the
+    first one whose ``job_args.json`` records the same signature. Completed
+    jobs delete their temp dir, so any match is by construction an incomplete
+    run that can be resumed.
+
+    Returns ``None`` when no matching directory exists.
+    """
+    if signature_hash is None:
+        signature_hash = _job_signature(args)
+
+    system_temp = Path(tempfile.gettempdir())
+    for candidate in sorted(system_temp.glob("stitch_*")):
+        if not candidate.is_dir():
+            continue
+        manifest_path = candidate / JOB_ARGS_FILENAME
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if manifest.get("signature_hash") == signature_hash:
+            return candidate
+    return None
+
+
+def cleanup_stitch_temp_dirs() -> None:
+    """Remove every ``stitch_*`` job temp directory under the OS temp location.
+
+    Used to guarantee no build-up of (possibly confidential) intermediate lag
+    files across sessions: called on GUI startup and again on quit. Because job
+    temp dirs are session-only, wiping all of them here is safe.
+    """
+    system_temp = Path(tempfile.gettempdir())
+    for candidate in system_temp.glob("stitch_*"):
+        if candidate.is_dir():
+            shutil.rmtree(candidate, ignore_errors=True)
 
 
 def run_pipeline(
@@ -882,21 +984,44 @@ def run_pipeline(
     # Process lags (parallel or batch)
     # Use a unique, private system-temp directory per job so that (1) concurrent
     # jobs never collide and (2) the intermediate lag files (which may contain
-    # confidential information) are kept out of the user-visible save directory
-    # and are guaranteed to be removed after the merge.
-    job_id = getattr(args, "job_id", None) or uuid.uuid4().hex
-    temp_dir = _create_job_temp_dir(job_id)
-    print(f"Temporary lag files will be saved to a private directory: {temp_dir}")
+    # confidential information) are kept out of the user-visible save directory.
+    #
+    # If a previous run with the *identical* configuration was interrupted
+    # (stopped, failed, or crashed) its temp dir still holds the lag files it
+    # managed to write. We discover it by matching the job signature and resume
+    # into it, reprocessing only the lags that are still missing. Completed jobs
+    # delete their temp dir, so any match is by construction incomplete.
+    signature_hash = _job_signature(args)
+    temp_dir = _find_resumable_temp_dir(args, signature_hash)
+    if temp_dir is not None:
+        print(f"Resuming previous job from private directory: {temp_dir}")
+    else:
+        temp_dir = _create_job_temp_dir(signature_hash)
+        print(
+            f"Temporary lag files will be saved to a private directory: {temp_dir}"
+        )
+    _write_job_args(temp_dir, args, signature_hash)
 
     try:
         _raise_if_cancelled(should_cancel)
 
-        # Generate list of lags to process
-        lags_to_process = list(range(args.n_lags))
+        # Resume support: skip lags whose temp file already exists.
+        def _lag_file(n: int) -> Path:
+            return temp_dir / f"{args.measure_type}_lag_{n:04d}.parquet"
 
-        if args.parallel:
-            print(f"Using parallel processing for {args.n_lags} lags")
-            temp_files = process_multiple_lags_parallel(
+        lags_to_process = [n for n in range(args.n_lags) if not _lag_file(n).exists()]
+        already_done = args.n_lags - len(lags_to_process)
+        if already_done:
+            print(
+                f"Resuming: {already_done}/{args.n_lags} lags already processed, "
+                f"{len(lags_to_process)} remaining."
+            )
+
+        if not lags_to_process:
+            print("All lags already processed; skipping straight to merge.")
+        elif args.parallel:
+            print(f"Using parallel processing for {len(lags_to_process)} lags")
+            process_multiple_lags_parallel(
                 hrs_data=hrs_epi_data,
                 contextual_dir=contextual_data_all,
                 n_days=lags_to_process,
@@ -909,8 +1034,8 @@ def run_pipeline(
                 should_cancel=should_cancel,
             )
         else:
-            print(f"Using batch processing for {args.n_lags} lags")
-            temp_files = process_multiple_lags_batch(
+            print(f"Using batch processing for {len(lags_to_process)} lags")
+            process_multiple_lags_batch(
                 hrs_data=hrs_epi_data,
                 contextual_dir=contextual_data_all,
                 n_days=lags_to_process,
@@ -923,19 +1048,19 @@ def run_pipeline(
                 should_cancel=should_cancel,
             )
 
-        print(f"Finished processing {len(temp_files)} lag files")
         # clean up
         del contextual_data_all
+
+        # Collect every lag file present in the temp dir (previously-resumed and
+        # newly-written), filtered to this measure type and sorted by lag.
+        temp_files = sorted(
+            temp_dir.glob(f"{args.measure_type}_lag_*.parquet"),
+            key=lambda f: int(f.stem.split("_lag_")[1]),
+        )
 
         # Merge all lag outputs
         print(f"Merging {len(temp_files)} lag outputs with main HRS data...")
         final_df = hrs_epi_data.df
-
-        # Filter files to current measure type (prefix) to avoid leftovers, then sort by lag
-        temp_files = [
-            f for f in temp_files if f.stem.startswith(f"{args.measure_type}_lag_")
-        ]
-        temp_files.sort(key=lambda f: int(f.stem.split("_lag_")[1]))
 
         # Collect all “lag” columns to concatenate at once
         lag_cols = []
@@ -1009,7 +1134,16 @@ def run_pipeline(
         print(f"Saving final dataset to {out_path}")
         write_data(final_df, out_path, index=False)
         print("Done.")
-    finally:
-        # Always remove the private temp directory (and any confidential lag
-        # files it holds), even if processing/merging/saving raised an error.
+    except BaseException:
+        # On any failure or cancellation, deliberately keep the private temp
+        # directory (and its partial lag files) so an identical rerun can resume
+        # from where it left off. Leftover dirs are wiped on GUI startup/quit and
+        # by the successful completion path below.
+        print(
+            f"Run did not complete; keeping temp directory for resume: {temp_dir}"
+        )
+        raise
+    else:
+        # Only a fully successful run removes the private temp directory (and any
+        # confidential lag files it holds).
         shutil.rmtree(temp_dir, ignore_errors=True)

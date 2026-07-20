@@ -13,6 +13,7 @@ pipeline's intermediate ("lag") files:
 """
 
 import argparse
+import json
 import os
 import stat
 import tempfile
@@ -22,7 +23,28 @@ import pandas as pd
 import pytest
 
 import stitch.process
-from stitch.process import _create_job_temp_dir, run_pipeline
+from stitch.process import (
+    PipelineCancelled,
+    _create_job_temp_dir,
+    _job_signature,
+    cleanup_stitch_temp_dirs,
+    run_pipeline,
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_temp_root(tmp_path, monkeypatch):
+    """Redirect the OS temp location to a fresh per-test directory.
+
+    Job temp dirs, resume discovery, and cleanup all key off
+    ``tempfile.gettempdir()``. Isolating it per test prevents a leftover
+    (intentionally kept) temp dir from one test from being resumed by another.
+    """
+    temp_root = tmp_path / "ostemp"
+    temp_root.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+    yield
+    cleanup_stitch_temp_dirs()
 
 
 def _make_args(
@@ -148,14 +170,14 @@ def test_run_pipeline_cleans_up_temp_dir(
     assert not (save_dir / "temp_lag_files").exists()
 
 
-def test_run_pipeline_cleans_up_on_failure(
+def test_run_pipeline_keeps_temp_dir_on_failure(
     fake_residential_history_file,
     survey_data_2016_2020,
     heat_index_dir,
     tmp_path,
     monkeypatch,
 ):
-    """The private temp dir is removed even when the merge step raises."""
+    """On failure the temp dir PERSISTS (for resume) and cleanup removes it."""
     save_dir = tmp_path / "save"
     save_dir.mkdir()
 
@@ -177,13 +199,252 @@ def test_run_pipeline_cleans_up_on_failure(
     with pytest.raises(RuntimeError, match="simulated merge failure"):
         run_pipeline(args)
 
-    # Even on failure, the confidential temp dir must be cleaned up.
+    # The temp dir is intentionally kept so an identical rerun can resume.
     assert len(created) == 1
-    assert not created[0].exists()
+    temp_dir = created[0]
+    assert temp_dir.exists()
+    # The job-args manifest and the partial lag files were left behind.
+    assert (temp_dir / "job_args.json").exists()
+    assert list(temp_dir.glob("heat_lag_*.parquet"))
 
-    # And nothing leaked into the save dir.
+    # Nothing leaked into the user-visible save dir.
     leftovers = [p for p in save_dir.iterdir() if p.is_dir()]
     assert leftovers == [], f"unexpected leftover directories: {leftovers}"
+
+    # Explicit cleanup (as run on GUI startup/quit) wipes it.
+    cleanup_stitch_temp_dirs()
+    assert not temp_dir.exists()
+
+
+def test_job_args_manifest_written_and_matches(
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+    monkeypatch,
+):
+    """The job_args.json manifest records the signature and configuration."""
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    created = _spy_on_temp_dirs(monkeypatch)
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("stop before completion")
+
+    monkeypatch.setattr(stitch.process.pd, "read_parquet", _boom)
+
+    args = _make_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+    )
+    with pytest.raises(RuntimeError):
+        run_pipeline(args)
+
+    manifest = json.loads((created[0] / "job_args.json").read_text())
+    assert manifest["signature_hash"] == _job_signature(args)
+    assert manifest["n_lags"] == args.n_lags
+    assert manifest["args"]["measure_type"] == "heat"
+
+
+def test_resume_reuses_temp_dir_and_processes_only_missing_lags(
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+    monkeypatch,
+):
+    """A rerun of an identical job resumes into the same dir and only
+    reprocesses the lags whose files are missing."""
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    created = _spy_on_temp_dirs(monkeypatch)
+    args = _make_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+    )
+
+    # --- First run fails during merge, leaving the lag files behind. ---
+    real_read_parquet = stitch.process.pd.read_parquet
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated merge failure")
+
+    monkeypatch.setattr(stitch.process.pd, "read_parquet", _boom)
+    with pytest.raises(RuntimeError, match="simulated merge failure"):
+        run_pipeline(args)
+
+    assert len(created) == 1
+    temp_dir = created[0]
+    lag_files = sorted(temp_dir.glob("heat_lag_*.parquet"))
+    assert lag_files, "expected partial lag files from the interrupted run"
+
+    # Remove exactly one lag file so the resume must reprocess only that lag.
+    removed = lag_files[0]
+    removed_n = int(removed.stem.split("_lag_")[1])
+    removed.unlink()
+
+    # --- Second run: restore real reader, spy on the batch processor. ---
+    monkeypatch.setattr(stitch.process.pd, "read_parquet", real_read_parquet)
+
+    processed_lags = []
+    real_batch = stitch.process.process_multiple_lags_batch
+
+    def _spy_batch(*a, **k):
+        processed_lags.append(list(k.get("n_days")))
+        return real_batch(*a, **k)
+
+    monkeypatch.setattr(stitch.process, "process_multiple_lags_batch", _spy_batch)
+
+    run_pipeline(args)
+
+    # No new temp dir was created: the resume reused the existing one.
+    assert len(created) == 1
+    # Only the missing lag was reprocessed.
+    assert processed_lags == [[removed_n]]
+    # The output was produced and the completed job cleaned up its temp dir.
+    assert (save_dir / args.output_name).exists()
+    assert not temp_dir.exists()
+
+
+def test_resume_after_midrun_cancel(
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+    monkeypatch,
+):
+    """Cancelling mid-run keeps the partial lag files; a rerun resumes them.
+
+    This mirrors the GUI Stop button: cancellation is requested while lags are
+    still being processed, so some lag files have been written and some have
+    not. The rerun must reuse the same temp dir and reprocess only the lags
+    that are still missing.
+    """
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    created = _spy_on_temp_dirs(monkeypatch)
+    args = _make_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+        n_lags=3,
+        parallel=False,
+    )
+
+    # Cooperative cancel: request a stop as soon as the first lag file lands, so
+    # processing unwinds partway through (like the user clicking Stop mid-run).
+    def should_cancel():
+        return bool(created) and any(created[0].glob("heat_lag_*.parquet"))
+
+    with pytest.raises(PipelineCancelled):
+        run_pipeline(args, should_cancel=should_cancel)
+
+    assert len(created) == 1
+    temp_dir = created[0]
+    assert temp_dir.exists()
+    done_before = sorted(temp_dir.glob("heat_lag_*.parquet"))
+    assert 1 <= len(done_before) < args.n_lags, (
+        "expected a partial set of lag files after mid-run cancel"
+    )
+    done_lags = {int(p.stem.split("_lag_")[1]) for p in done_before}
+    expected_remaining = [n for n in range(args.n_lags) if n not in done_lags]
+
+    # Rerun with no cancellation; spy on the processor to confirm which lags run.
+    processed_lags = []
+    real_batch = stitch.process.process_multiple_lags_batch
+
+    def _spy_batch(*a, **k):
+        processed_lags.append(list(k.get("n_days")))
+        return real_batch(*a, **k)
+
+    monkeypatch.setattr(stitch.process, "process_multiple_lags_batch", _spy_batch)
+
+    run_pipeline(args)
+
+    # Reused the same temp dir and only reprocessed the lags left unfinished.
+    assert len(created) == 1
+    assert processed_lags == [expected_remaining]
+    assert (save_dir / args.output_name).exists()
+    assert not temp_dir.exists()
+
+
+def test_different_args_do_not_resume(
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+    monkeypatch,
+):
+    """A job with different configuration never resumes an unrelated temp dir."""
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    created = _spy_on_temp_dirs(monkeypatch)
+
+    real_read_parquet = stitch.process.pd.read_parquet
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated merge failure")
+
+    monkeypatch.setattr(stitch.process.pd, "read_parquet", _boom)
+
+    args_a = _make_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+        output_name="job_a.dta",
+    )
+    with pytest.raises(RuntimeError):
+        run_pipeline(args_a)
+
+    assert len(created) == 1
+    dir_a = created[0]
+    assert dir_a.exists()
+
+    # A different job (distinct output_name -> distinct signature) succeeds and
+    # must create its own dir rather than resuming dir_a.
+    monkeypatch.setattr(stitch.process.pd, "read_parquet", real_read_parquet)
+    args_b = _make_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+        output_name="job_b.dta",
+    )
+    run_pipeline(args_b)
+
+    assert len(created) == 2
+    assert created[1] != dir_a
+    # A's incomplete dir is untouched by B; B's dir is cleaned up on success.
+    assert dir_a.exists()
+    assert not created[1].exists()
+    assert (save_dir / "job_b.dta").exists()
+
+
+def test_cleanup_stitch_temp_dirs_removes_only_stitch_dirs(tmp_path):
+    """cleanup_stitch_temp_dirs removes stitch_* dirs and nothing else."""
+    temp_root = Path(tempfile.gettempdir())
+    stitch_a = _create_job_temp_dir("aaaa")
+    stitch_b = _create_job_temp_dir("bbbb")
+    other = temp_root / "unrelated_dir"
+    other.mkdir()
+
+    assert stitch_a.exists() and stitch_b.exists() and other.exists()
+
+    cleanup_stitch_temp_dirs()
+
+    assert not stitch_a.exists()
+    assert not stitch_b.exists()
+    assert other.exists()
 
 
 def test_concurrent_jobs_do_not_collide(
