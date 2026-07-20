@@ -114,8 +114,8 @@ def test_add_multiple_jobs(
     window = StitchMainWindow()
     qtbot.addWidget(window)
 
-    # Empty queue: Run All / Edit / Remove disabled.
-    assert window.run_all_button.isEnabled() is False
+    # Empty queue: Edit / Remove disabled; Run All stays enabled so it can warn.
+    assert window.run_all_button.isEnabled() is True
     assert window.edit_button.isEnabled() is False
     assert window.remove_button.isEnabled() is False
 
@@ -348,6 +348,101 @@ def test_open_output_opens_selected_job_dir(qtbot, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Run All warnings + Quit button
+# ---------------------------------------------------------------------------
+
+
+def test_run_all_warns_when_no_jobs(qtbot, monkeypatch):
+    """Clicking Run All with an empty queue pops a 'no jobs' warning."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    window = StitchMainWindow()
+    qtbot.addWidget(window)
+
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        staticmethod(lambda *a, **k: warnings.append((a[1], a[2]))),
+    )
+
+    window._on_run_all()
+
+    assert len(warnings) == 1
+    assert warnings[0][0] == "No Jobs in Queue"
+
+
+def test_run_all_warns_when_all_jobs_ran(
+    qtbot,
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+    monkeypatch,
+):
+    """Clicking Run All when nothing is pending pops an 'all jobs ran' warning."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    window = StitchMainWindow()
+    qtbot.addWidget(window)
+
+    args = _make_job_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+    )
+    _add_job_via_ui(window, args, monkeypatch)
+
+    # Pretend it already ran.
+    window.jobs[0].status = STATUS_DONE
+    window._refresh_job_item(0)
+
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        staticmethod(lambda *a, **k: warnings.append((a[1], a[2]))),
+    )
+
+    window._on_run_all()
+
+    assert len(warnings) == 1
+    assert warnings[0][0] == "All Jobs Ran"
+
+
+def test_quit_button_closes_window(qtbot, monkeypatch):
+    """The Quit button triggers the window's close path (-> QApplication.quit)."""
+    from PyQt6.QtWidgets import QApplication
+
+    window = StitchMainWindow()
+    qtbot.addWidget(window)
+
+    assert window.quit_button.text() == "Quit"
+
+    quit_calls = []
+    monkeypatch.setattr(
+        QApplication, "quit", staticmethod(lambda *a, **k: quit_calls.append(True))
+    )
+    window.quit_button.click()
+
+    assert quit_calls == [True]
+
+
+def test_job_buttons_have_short_labels(qtbot):
+    """Edit/Remove buttons use the short labels."""
+    window = StitchMainWindow()
+    qtbot.addWidget(window)
+
+    assert window.edit_button.text() == "Edit"
+    assert window.remove_button.text() == "Remove"
+    assert window.open_output_button.text() == "Open Output Directory"
+
+
+# ---------------------------------------------------------------------------
 # Sequential run integration (modal ExecutionDialog + single worker thread)
 # ---------------------------------------------------------------------------
 
@@ -416,8 +511,8 @@ def test_run_all_sequential_integration(
         assert _item_bg(window, i) == STATUS_COLORS[STATUS_DONE][0].lower()
         assert (save_dir / name).exists(), f"missing output for {name}"
 
-    # No pending jobs remain, so Run All is disabled again.
-    assert window.run_all_button.isEnabled() is False
+    # No pending jobs remain, but Run All stays enabled (it warns on click).
+    assert window.run_all_button.isEnabled() is True
 
 
 def test_run_all_marks_failed_job(

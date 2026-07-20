@@ -182,19 +182,26 @@ class StitchMainWindow(QMainWindow):
         self.run_all_button.clicked.connect(self._on_run_all)
         jobs_buttons.addWidget(self.run_all_button)
 
-        self.edit_button = QPushButton("Edit Selected")
+        self.edit_button = QPushButton("Edit")
         self.edit_button.clicked.connect(self._on_edit_selected)
         jobs_buttons.addWidget(self.edit_button)
 
-        self.remove_button = QPushButton("Remove Selected")
+        self.remove_button = QPushButton("Remove")
         self.remove_button.clicked.connect(self._on_remove_selected)
         jobs_buttons.addWidget(self.remove_button)
 
-        # Right-aligned, separated from the job-editing buttons.
-        jobs_buttons.addStretch()
         self.open_output_button = QPushButton("Open Output Directory")
         self.open_output_button.clicked.connect(self._on_open_output)
         jobs_buttons.addWidget(self.open_output_button)
+
+        # Quit is right-aligned, separated from the job-management buttons.
+        jobs_buttons.addStretch()
+        self.quit_button = QPushButton("Quit")
+        self.quit_button.setStyleSheet(
+            "background-color: #d9534f; color: white; font-weight: bold;"
+        )
+        self.quit_button.clicked.connect(self.close)
+        jobs_buttons.addWidget(self.quit_button)
 
         jobs_layout.addLayout(jobs_buttons)
 
@@ -326,9 +333,16 @@ class StitchMainWindow(QMainWindow):
             if job.status == STATUS_PENDING
         ]
         if not run_items:
-            QMessageBox.information(
-                self, "No Pending Jobs", "There are no pending jobs to run."
-            )
+            if self.jobs:
+                QMessageBox.warning(
+                    self,
+                    "All Jobs Ran",
+                    "All jobs have already been run. Edit or add a job to run again.",
+                )
+            else:
+                QMessageBox.warning(
+                    self, "No Jobs in Queue", "There are no jobs in the queue. Add a job first."
+                )
             return
 
         dialog = ExecutionDialog(run_items, self)
@@ -347,9 +361,10 @@ class StitchMainWindow(QMainWindow):
     def _refresh_buttons(self):
         """Enable/disable buttons based on current queue state."""
         has_jobs = len(self.jobs) > 0
-        has_pending = any(job.status == STATUS_PENDING for job in self.jobs)
         self.open_output_button.setEnabled(has_jobs)
-        self.run_all_button.setEnabled(has_pending)
+        # Always clickable so "Run All" can surface a warning when there are no
+        # pending jobs (all ran) or no jobs at all.
+        self.run_all_button.setEnabled(True)
         self.edit_button.setEnabled(has_jobs)
         self.remove_button.setEnabled(has_jobs)
 
