@@ -826,6 +826,7 @@ def _write_job_args(
         "signature_hash": signature_hash,
         "args": _job_args_to_dict(args),
         "n_lags": getattr(args, "n_lags", None),
+        "start_lag": getattr(args, "start_lag", 0),
     }
     manifest_path.write_text(
         json.dumps(payload, sort_keys=True, default=str, indent=2),
@@ -906,7 +907,8 @@ def run_pipeline(
         - data_col: Data column name in contextual files
         - geoid_col: GEOID column name in HRS data
         - contextual_geoid_col: GEOID column name in contextual files
-        - n_lags: Number of lags to process
+        - n_lags: Number of lags to process (exclusive upper bound)
+        - start_lag: Lag day to start from, i.e. minimum days prior (optional, default 0)
         - file_extension: File extension for contextual files (optional)
         - parallel: Whether to use parallel processing
         - include_lag_date: Whether to include lag date columns
@@ -1009,11 +1011,15 @@ def run_pipeline(
         def _lag_file(n: int) -> Path:
             return temp_dir / f"{args.measure_type}_lag_{n:04d}.parquet"
 
-        lags_to_process = [n for n in range(args.n_lags) if not _lag_file(n).exists()]
-        already_done = args.n_lags - len(lags_to_process)
+        start_lag = int(getattr(args, "start_lag", 0) or 0)
+        lags_to_process = [
+            n for n in range(start_lag, args.n_lags) if not _lag_file(n).exists()
+        ]
+        total_lags = args.n_lags - start_lag
+        already_done = total_lags - len(lags_to_process)
         if already_done:
             print(
-                f"Resuming: {already_done}/{args.n_lags} lags already processed, "
+                f"Resuming: {already_done}/{total_lags} lags already processed, "
                 f"{len(lags_to_process)} remaining."
             )
 

@@ -55,6 +55,7 @@ def _make_args(
     residential_hist,
     output_name="linked_data.dta",
     n_lags=3,
+    start_lag=0,
     parallel=False,
 ):
     """Build an argparse.Namespace mirroring the CLI defaults for run_pipeline."""
@@ -76,6 +77,7 @@ def _make_args(
         res_hist_date_col="move_date",
         res_hist_geoid_col="GEOID",
         n_lags=n_lags,
+        start_lag=start_lag,
         parallel=parallel,
         include_lag_date=False,
         geoid_treatment="code",
@@ -310,6 +312,43 @@ def test_resume_reuses_temp_dir_and_processes_only_missing_lags(
     # The output was produced and the completed job cleaned up its temp dir.
     assert (save_dir / args.output_name).exists()
     assert not temp_dir.exists()
+
+
+def test_start_lag_restricts_processed_window(
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+    monkeypatch,
+):
+    """A non-zero start_lag skips the earlier lags: only [start_lag, n_lags) run."""
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    args = _make_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+        n_lags=5,
+        start_lag=2,
+        parallel=False,
+    )
+
+    processed_lags = []
+    real_batch = stitch.process.process_multiple_lags_batch
+
+    def _spy_batch(*a, **k):
+        processed_lags.append(list(k.get("n_days")))
+        return real_batch(*a, **k)
+
+    monkeypatch.setattr(stitch.process, "process_multiple_lags_batch", _spy_batch)
+
+    run_pipeline(args)
+
+    # Lags 0 and 1 are skipped; only 2, 3, 4 are processed.
+    assert processed_lags == [[2, 3, 4]]
+    assert (save_dir / args.output_name).exists()
 
 
 def test_resume_after_midrun_cancel(

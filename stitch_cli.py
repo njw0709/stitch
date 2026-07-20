@@ -141,6 +141,12 @@ def _create_parser() -> argparse.ArgumentParser:
         help="Number of lags to process (default: 365)",
     )
     parser.add_argument(
+        "--start-lag",
+        type=int,
+        default=0,
+        help="Lag day to start from, i.e. minimum days prior (default: 0).",
+    )
+    parser.add_argument(
         "--parallel", action="store_true", help="Use parallel processing"
     )
     parser.add_argument(

@@ -57,25 +57,47 @@ class PipelineConfigPage(QWizardPage):
 
         layout = QVBoxLayout()
 
-        # --- Execution options group ---
-        exec_group = QGroupBox("Execution Options")
+        # --- Temporal lag options group ---
+        exec_group = QGroupBox("Temporal lag options")
         exec_layout = QFormLayout()
 
-        self.n_lags_spin = QSpinBox()
-        self.n_lags_spin.setMinimum(1)
-        self.n_lags_spin.setMaximum(10000)
-        self.n_lags_spin.setValue(365)
-        self.n_lags_spin.setSingleStep(1)
-        exec_layout.addRow("Number of Lags:", self.n_lags_spin)
+        self.start_lag_spin = QSpinBox()
+        self.start_lag_spin.setMinimum(0)
+        self.start_lag_spin.setMaximum(10000)
+        self.start_lag_spin.setValue(0)
+        self.start_lag_spin.setSingleStep(1)
 
+        self.end_lag_spin = QSpinBox()
+        self.end_lag_spin.setMinimum(0)
+        self.end_lag_spin.setMaximum(10000)
+        self.end_lag_spin.setValue(365)
+        self.end_lag_spin.setSingleStep(1)
+
+        self.lag_count_label = QLabel()
+        self.lag_count_label.setStyleSheet("color: gray; font-style: italic;")
+
+        lags_row = QHBoxLayout()
+        lags_row.addWidget(self.start_lag_spin)
+        lags_row.addWidget(QLabel("~"))
+        lags_row.addWidget(self.end_lag_spin)
+        lags_row.addWidget(QLabel("day prior"))
+        lags_row.addWidget(self.lag_count_label)
+        lags_row.addStretch()
+        exec_layout.addRow("Lags:", lags_row)
+
+        self.start_lag_spin.valueChanged.connect(self._update_lag_count_label)
+        self.start_lag_spin.valueChanged.connect(self.completeChanged)
+        self.end_lag_spin.valueChanged.connect(self._update_lag_count_label)
+        self.end_lag_spin.valueChanged.connect(self.completeChanged)
+        self._update_lag_count_label()
+
+        # Checkboxes moved to the Output Settings group below.
         self.parallel_checkbox = QCheckBox(
             "Use parallel processing (faster for large datasets)"
         )
         self.parallel_checkbox.setChecked(True)
-        exec_layout.addRow("", self.parallel_checkbox)
 
         self.include_lag_date_checkbox = QCheckBox("Include lag date columns in output")
-        exec_layout.addRow("", self.include_lag_date_checkbox)
 
         exec_group.setLayout(exec_layout)
         layout.addWidget(exec_group)
@@ -198,29 +220,34 @@ class PipelineConfigPage(QWizardPage):
         output_row.addWidget(self.output_name_edit, 1)
         output_layout.addRow("", output_row)
 
+        output_layout.addRow("", self.parallel_checkbox)
+        output_layout.addRow("", self.include_lag_date_checkbox)
+
         output_group.setLayout(output_layout)
         layout.addWidget(output_group)
 
-        # --- Configuration summary ---
-        summary_group = QGroupBox("Configuration Summary")
-        summary_layout = QVBoxLayout()
+        # Validation message shown when "Add Job" is clicked with missing fields.
+        self.validation_label = QLabel()
+        self.validation_label.setStyleSheet("color: #dc3545;")
+        self.validation_label.setWordWrap(True)
+        layout.addWidget(self.validation_label)
 
-        summary_label = QLabel("Review your configuration before running the pipeline:")
-        summary_layout.addWidget(summary_label)
-
-        self.summary_text = QTextEdit()
-        self.summary_text.setReadOnly(True)
-        self.summary_text.setMaximumHeight(200)
-        summary_layout.addWidget(self.summary_text)
-
-        summary_group.setLayout(summary_layout)
-        layout.addWidget(summary_group)
+        # Clear the error highlight as soon as the user edits a flagged field.
+        self.save_dir_picker.path_edit.textChanged.connect(
+            lambda: self._set_field_error(self.save_dir_picker.path_edit, False)
+        )
+        self.output_name_edit.textChanged.connect(
+            lambda: self._set_field_error(self.output_name_edit, False)
+        )
+        self.start_lag_spin.valueChanged.connect(self._clear_lag_range_error)
+        self.end_lag_spin.valueChanged.connect(self._clear_lag_range_error)
 
         layout.addStretch()
         self.setLayout(layout)
 
         # Register fields
-        self.registerField("n_lags", self.n_lags_spin)
+        self.registerField("start_lag", self.start_lag_spin)
+        self.registerField("end_lag", self.end_lag_spin)
         self.registerField("parallel", self.parallel_checkbox)
         self.registerField("include_lag_date", self.include_lag_date_checkbox)
         self.registerField("save_dir*", self.save_dir_picker.path_edit)
@@ -235,9 +262,8 @@ class PipelineConfigPage(QWizardPage):
     # ------------------------------------------------------------------
 
     def initializePage(self):
-        """Called when the page is shown. Load raw geoid samples and summary."""
+        """Called when the page is shown. Load raw geoid samples."""
         self._load_raw_geoid_samples()
-        self._update_summary()
 
     # ------------------------------------------------------------------
     # GEOID sampling
@@ -403,100 +429,10 @@ class PipelineConfigPage(QWizardPage):
 
         self.preview_result_text.setPlainText("\n".join(lines))
 
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
-
-    def _update_summary(self):
-        """Update the configuration summary text."""
-        wizard = self.wizard()
-        if not wizard:
-            return
-
-        summary_lines = []
-
-        # HRS Data
-        summary_lines.append("=== Survey Data ===")
-        hrs_path = wizard.field("hrs_data_path")
-        date_col = wizard.field("date_col")
-        id_col = wizard.field("id_col")
-        geoid_col = wizard.field("geoid_col")
-        summary_lines.append(f"File: {hrs_path}")
-        summary_lines.append(f"Date Column: {date_col}")
-        summary_lines.append(f"ID Column: {id_col}")
-        summary_lines.append(f"GEOID Column: {geoid_col}")
-        summary_lines.append("")
-
-        # Residential History
-        use_res_hist = wizard.field("use_residential_hist")
-        summary_lines.append("=== Residential History ===")
-        if use_res_hist:
-            res_hist_path = wizard.field("residential_hist_path")
-            summary_lines.append("Enabled: Yes")
-            summary_lines.append(f"File: {res_hist_path}")
-            summary_lines.append(f"ID Column: {wizard.field('res_hist_id_col')}")
-            summary_lines.append(f"Move Date Column: {wizard.field('res_hist_date_col')}")
-            summary_lines.append(f"GEOID Column: {wizard.field('res_hist_geoid_col')}")
-        else:
-            summary_lines.append("Enabled: No")
-        summary_lines.append("")
-
-        # Contextual Data
-        summary_lines.append("=== Contextual Data ===")
-        context_dir = wizard.field("context_dir")
-        measure_type = wizard.field("measure_type")
-        data_col = wizard.field("data_col")
-        contextual_geoid_col = wizard.field("contextual_geoid_col")
-        file_ext = wizard.field("file_extension")
-        summary_lines.append(f"Directory: {context_dir}")
-        summary_lines.append(f"Measure Type: {measure_type}")
-
-        if data_col and "," in data_col:
-            data_cols = [col.strip() for col in data_col.split(",")]
-            summary_lines.append(f"Data Columns ({len(data_cols)}):")
-            for col in data_cols:
-                summary_lines.append(f"  - {col}")
-        else:
-            summary_lines.append(f"Data Column: {data_col}")
-
-        summary_lines.append(f"GEOID Column: {contextual_geoid_col}")
-        summary_lines.append(f"File Extension: {file_ext}")
-        summary_lines.append("")
-
-        # GEOID Normalization
-        summary_lines.append("=== GEOID Normalization ===")
-        if self.treatment_combo.currentIndex() == 0:
-            summary_lines.append("Treatment: Code (string)")
-            if self.zero_pad_checkbox.isChecked():
-                summary_lines.append(f"Zero-pad to {self.n_digits_spin.value()} digits")
-            else:
-                summary_lines.append("No zero-padding (digits only)")
-        else:
-            summary_lines.append("Treatment: Numeric")
-            summary_lines.append(f"Cast to: {self.numeric_type_combo.currentText()}")
-        summary_lines.append("")
-
-        # Pipeline Settings
-        summary_lines.append("=== Pipeline Settings ===")
-        summary_lines.append(f"Number of Lags: {self.n_lags_spin.value()}")
-        summary_lines.append(
-            f"Parallel Processing: {'Yes' if self.parallel_checkbox.isChecked() else 'No'}"
-        )
-        summary_lines.append(
-            f"Include Lag Dates: {'Yes' if self.include_lag_date_checkbox.isChecked() else 'No'}"
-        )
-        summary_lines.append("")
-
-        # Output
-        summary_lines.append("=== Output ===")
-        summary_lines.append(f"Save Directory: {self.save_dir_picker.get_path()}")
-        summary_lines.append(f"Output Filename: {self.output_name_edit.text()}")
-
-        self.summary_text.setText("\n".join(summary_lines))
-
     def load_from_args(self, args):
         """Restore this page's state from a previously built args namespace."""
-        self.n_lags_spin.setValue(int(getattr(args, "n_lags", 365) or 365))
+        self.start_lag_spin.setValue(int(getattr(args, "start_lag", 0) or 0))
+        self.end_lag_spin.setValue(int(getattr(args, "n_lags", 366) or 366) - 1)
         self.parallel_checkbox.setChecked(bool(getattr(args, "parallel", True)))
         self.include_lag_date_checkbox.setChecked(
             bool(getattr(args, "include_lag_date", False))
@@ -521,12 +457,60 @@ class PipelineConfigPage(QWizardPage):
         numeric_type = getattr(args, "geoid_numeric_type", "int") or "int"
         self.numeric_type_combo.setCurrentIndex(0 if numeric_type == "int" else 1)
 
+    ERROR_STYLE = "border: 2px solid #dc3545; border-radius: 3px;"
+
     def isComplete(self):
-        """Check if the page is complete."""
-        if not self.save_dir_picker.get_path():
-            return False
-        if not self.save_dir_picker.is_valid():
-            return False
-        if not self.output_name_edit.text().strip():
-            return False
+        """Keep the "Add Job" button interactive; validation runs in validatePage."""
         return True
+
+    def validatePage(self):
+        """Validate required fields, highlighting any that are missing/invalid."""
+        problems = []
+
+        # Lag range: start must not exceed end.
+        range_ok = self.start_lag_spin.value() <= self.end_lag_spin.value()
+        self._set_field_error(self.start_lag_spin, not range_ok)
+        self._set_field_error(self.end_lag_spin, not range_ok)
+        if not range_ok:
+            problems.append("a valid lag range (start day must not exceed end day)")
+
+        # Save directory: must be set and valid.
+        save_dir_ok = bool(self.save_dir_picker.get_path()) and (
+            self.save_dir_picker.is_valid()
+        )
+        self._set_field_error(self.save_dir_picker.path_edit, not save_dir_ok)
+        if not save_dir_ok:
+            problems.append("a valid save directory")
+
+        # Output filename: must be non-empty.
+        output_ok = bool(self.output_name_edit.text().strip())
+        self._set_field_error(self.output_name_edit, not output_ok)
+        if not output_ok:
+            problems.append("an output filename")
+
+        if problems:
+            self.validation_label.setText(
+                "✗ Please provide: " + ", ".join(problems) + "."
+            )
+            return False
+
+        self.validation_label.setText("")
+        return True
+
+    def _set_field_error(self, widget, has_error: bool):
+        """Toggle a red error border on a widget."""
+        widget.setStyleSheet(self.ERROR_STYLE if has_error else "")
+
+    def _clear_lag_range_error(self):
+        """Clear the lag-range highlight once the range becomes valid again."""
+        if self.start_lag_spin.value() <= self.end_lag_spin.value():
+            self._set_field_error(self.start_lag_spin, False)
+            self._set_field_error(self.end_lag_spin, False)
+
+    def _update_lag_count_label(self):
+        """Refresh the ``(N lags)`` helper from the start/end spinboxes."""
+        n = self.end_lag_spin.value() - self.start_lag_spin.value() + 1
+        if n < 1:
+            self.lag_count_label.setText("(invalid range)")
+        else:
+            self.lag_count_label.setText(f"({n} lags)")

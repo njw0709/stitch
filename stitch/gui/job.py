@@ -45,10 +45,16 @@ def build_args_from_wizard(wizard) -> argparse.Namespace:
         geoid_col=wizard.field("geoid_col"),
         contextual_geoid_col=wizard.field("contextual_geoid_col"),
         context_date_col=wizard.field("context_date_col"),
-        n_lags=wizard.field("n_lags"),
         parallel=wizard.field("parallel"),
         include_lag_date=wizard.field("include_lag_date"),
     )
+
+    # Temporal lag window: GUI presents an inclusive [start, end] range in days
+    # prior; internally n_lags is the exclusive upper bound (max lag = n_lags-1).
+    start_lag = int(wizard.field("start_lag") or 0)
+    end_lag = int(wizard.field("end_lag") or 0)
+    args.start_lag = start_lag
+    args.n_lags = end_lag + 1
 
     # Optional: file extension
     file_ext = wizard.field("file_extension")

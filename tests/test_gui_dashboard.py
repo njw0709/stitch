@@ -47,6 +47,7 @@ def _make_job_args(
     residential_hist,
     output_name="linked_data.dta",
     n_lags=3,
+    start_lag=0,
     parallel=False,
 ):
     """Build a fully-populated args namespace matching the config wizard fields."""
@@ -68,6 +69,7 @@ def _make_job_args(
         res_hist_date_col="move_date",
         res_hist_geoid_col="GEOID",
         n_lags=n_lags,
+        start_lag=start_lag,
         parallel=parallel,
         include_lag_date=False,
         geoid_treatment="code",
@@ -241,6 +243,7 @@ def test_edit_job_prefill_round_trip(
         "res_hist_date_col",
         "res_hist_geoid_col",
         "n_lags",
+        "start_lag",
         "parallel",
         "include_lag_date",
         "geoid_treatment",
@@ -250,6 +253,56 @@ def test_edit_job_prefill_round_trip(
         assert getattr(rebuilt, attr) == getattr(
             args, attr
         ), f"{attr}: {getattr(rebuilt, attr)!r} != {getattr(args, attr)!r}"
+
+
+def test_pipeline_config_lag_range_validation(qtbot, tmp_path):
+    """validatePage rejects an inverted range and the helper reflects the count."""
+    from stitch.gui.pages.pipeline_config_page import PipelineConfigPage
+
+    page = PipelineConfigPage()
+    qtbot.addWidget(page)
+
+    # The "Add Job" button stays enabled regardless of field state.
+    assert page.isComplete() is True
+
+    # Satisfy the other requirements (valid save dir + output name).
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+    page.save_dir_picker.set_path(str(save_dir))
+    page.output_name_edit.setText("out.dta")
+
+    # Inverted range is invalid: validatePage fails and highlights the spinboxes.
+    page.start_lag_spin.setValue(10)
+    page.end_lag_spin.setValue(5)
+    assert page.validatePage() is False
+    assert page.start_lag_spin.styleSheet() == PipelineConfigPage.ERROR_STYLE
+    assert page.end_lag_spin.styleSheet() == PipelineConfigPage.ERROR_STYLE
+
+    # Valid inclusive range clears the errors and passes; helper shows the count.
+    page.start_lag_spin.setValue(2)
+    page.end_lag_spin.setValue(6)
+    assert page.validatePage() is True
+    assert page.start_lag_spin.styleSheet() == ""
+    assert page.lag_count_label.text() == "(5 lags)"
+
+
+def test_pipeline_config_highlights_missing_fields(qtbot):
+    """Clicking Add Job with missing save dir / output name flags those fields."""
+    from stitch.gui.pages.pipeline_config_page import PipelineConfigPage
+
+    page = PipelineConfigPage()
+    qtbot.addWidget(page)
+
+    page.output_name_edit.setText("")  # clear the default filename
+
+    assert page.validatePage() is False
+    assert page.save_dir_picker.path_edit.styleSheet() == PipelineConfigPage.ERROR_STYLE
+    assert page.output_name_edit.styleSheet() == PipelineConfigPage.ERROR_STYLE
+    assert page.validation_label.text() != ""
+
+    # Editing a flagged field clears its highlight immediately.
+    page.output_name_edit.setText("out.dta")
+    assert page.output_name_edit.styleSheet() == ""
 
 
 def test_edit_selected_updates_job_and_resets_status(
