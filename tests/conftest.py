@@ -96,9 +96,13 @@ def residential_history_hrs(fake_residential_history_file):
 
 
 @pytest.fixture(scope="session")
-def fake_survey_file(tmp_path_factory):
+def fake_survey_file(tmp_path_factory, real_geoid_pool):
     """
     Create a fake survey/interview Stata file.
+
+    Uses the same pool of GEOIDs extracted from the heat-index data so that the
+    survey GEOIDs actually overlap the contextual data and linkage produces
+    non-null measure values.
 
     Returns
     -------
@@ -107,8 +111,8 @@ def fake_survey_file(tmp_path_factory):
     """
     import pandas as pd
 
-    # Get data from standalone generator
-    data_rows = create_survey_data(n_people=55)
+    # Get data from standalone generator, sampling GEOIDs from the heat data pool
+    data_rows = create_survey_data(n_people=55, geoid_pool=real_geoid_pool)
 
     # Convert to DataFrame
     df = pd.DataFrame(data_rows)
