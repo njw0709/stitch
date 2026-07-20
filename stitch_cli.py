@@ -161,7 +161,7 @@ def _create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--include-lag-date",
         action="store_true",
-        help="Include lag date columns in the output (default: False). "
+        help="Include lag date and GEOID columns in the output (default: False). "
         "Ignored if --post-lag-average is also set (averaging wins).",
     )
     parser.add_argument(

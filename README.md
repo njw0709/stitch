@@ -147,7 +147,7 @@ python stitch_cli.py \
 - `--n-lags`: Number of lag days to compute, i.e. the exclusive upper bound of the lag window (default: 365, so lags 0–364 days prior)
 - `--start-lag`: Lag day to start from, i.e. the minimum days prior (default: 0). Combined with `--n-lags`, the pipeline processes lags `start_lag`–`n_lags − 1` days prior
 - `--parallel`: Enable parallel processing
-- `--include-lag-date`: Include lag date columns in output. Ignored if `--post-lag-average` is also set (averaging wins)
+- `--include-lag-date`: Include lag date and GEOID columns in output (one `{date_col}_{n}day_prior` and one `{geoid_col}_{n}day_prior` column per lag). Ignored if `--post-lag-average` is also set (averaging wins)
 - `--post-lag-average`: Average each measure across all lags into a single column per measure (e.g. `HeatIndex_avg_0_364day_prior`) instead of one column per lag. Strict handling: a participant missing a value for **any** lag in the range gets a missing (NaN) average. Incompatible with `--include-lag-date`
 - `--save-temp-to-output`: Write the intermediate per-lag files as CSV into `<save-dir>/<output_stem>_lag_files/` and keep them after the run (default: hidden Parquet files in a private temp directory, deleted on success)
 

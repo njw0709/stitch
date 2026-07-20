@@ -97,7 +97,9 @@ class PipelineConfigPage(QWizardPage):
         )
         self.parallel_checkbox.setChecked(True)
 
-        self.include_lag_date_checkbox = QCheckBox("Include lag date columns in output")
+        self.include_lag_date_checkbox = QCheckBox(
+            "Include lag date and GEOID columns in output"
+        )
 
         self.post_lag_average_checkbox = QCheckBox(
             "Post-lag averaging: average measure across all lags (single column per measure)"
@@ -113,7 +115,7 @@ class PipelineConfigPage(QWizardPage):
             "Averages each measure across all lags into a single column.\n"
             "Strict handling: any participant missing a value for any lag in the "
             "range will have a missing (NaN) average.\n"
-            "Incompatible with 'Include lag date columns'."
+            "Incompatible with 'Include lag date and GEOID columns'."
         )
 
         # Post-lag averaging and include-lag-date are mutually exclusive.
