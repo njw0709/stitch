@@ -4,7 +4,7 @@ STITCH is a Python-based interactive interface for linking diverse data sources 
 
 ## Features
 
-- **Lagged Data Linkage** - Compute n-day prior exposure for any number of lag periods
+- **Lagged Data Linkage** - Compute n-day prior exposure over a configurable lag window (choose both the start and end day prior)
 - **Residential History Support** - Account for participant moves during study period
 - **Flexible Data Formats** - Supports CSV, Stata, Parquet, Feather, and Excel files
 - **Parallel Processing** - Optimized for large-scale datasets with multiprocessing in local environment
@@ -60,8 +60,21 @@ The GUI provides a step-by-step wizard for:
 1. Selecting STITCH survey data with dropdown selection for ID column, date column, and GEOID column
 2. Configuring optional residential history with dynamic dropdown population from data
 3. Selecting and validating contextual data directories with file name filtering and column selection
-4. Setting pipeline parameters (number of lags, parallel processing)
+4. Setting pipeline parameters (the temporal lag window, parallel processing, output options)
 5. Running the pipeline with real-time progress monitoring
+
+#### Queueing and running jobs sequentially
+
+The GUI is organized as a multi-job dashboard. Each time you complete the wizard
+you add a configured job to the queue (the wizard's final button is labeled
+**Add Job**), so you can set up several linkage runs — for example different
+measures, lag windows, or output files — before running anything. You can
+**Edit** or **Remove** a queued job, or open its output directory.
+
+Clicking **Run All** executes every pending job **sequentially** in a single
+modal progress dialog, one after another, reporting each job's status
+(Running / Done / Failed) live. Jobs that already ran are skipped on the next
+**Run All**; edit a job to reset it to Pending and run it again.
 
 See [stitch/gui/README.md](stitch/gui/README.md) for detailed GUI documentation.
 
@@ -125,7 +138,8 @@ python stitch_cli.py \
 - `--geoid-col`: GEOID column name in survey data (default: GEOID2010)
 - `--contextual-geoid-col`: GEOID column name in contextual data files (default: GEOID10)
 - `--file-extension`: File extension to search for (e.g., .csv, .parquet)
-- `--n-lags`: Number of lag days to compute (default: 365)
+- `--n-lags`: Number of lag days to compute, i.e. the exclusive upper bound of the lag window (default: 365, so lags 0–364 days prior)
+- `--start-lag`: Lag day to start from, i.e. the minimum days prior (default: 0). Combined with `--n-lags`, the pipeline processes lags `start_lag`–`n_lags − 1` days prior
 - `--parallel`: Enable parallel processing
 - `--include-lag-date`: Include lag date columns in output
 
@@ -219,6 +233,30 @@ python stitch_cli.py \
 - **Parallel Processing**: Recommended for datasets with 500+ lags
 - **Memory Optimization**: Uses chunked reading and GEOID filtering for large files
 - **Efficient Storage**: Temporary lag files stored as Parquet for fast I/O
+
+## Temporary Files and Resuming
+
+While the pipeline runs, each lag is written to an intermediate ("lag") Parquet
+file before being merged into the final output.
+
+- **Location**: These files are written to a unique, private per-job directory
+  created inside the operating system's temporary location — `$TMPDIR` / `/tmp`
+  on Linux/macOS, `%TEMP%` on Windows — named `stitch_<id>_...`. They are
+  **not** placed in your `--save-dir` / output directory. The directory is
+  created with owner-only permissions (mode `0o700`) so the intermediate files,
+  which may contain confidential information, stay out of reach of other users,
+  and concurrent jobs never collide.
+- **Cleanup on completion**: When a job finishes successfully and its output is
+  merged and saved, its temporary directory (and all lag files it held) is
+  deleted automatically.
+- **Resuming interrupted runs**: If a run is interrupted (it fails, is stopped
+  mid-run, or crashes), its temporary directory is left in place with the lag
+  files already computed. Re-running the **identical** configuration detects the
+  matching directory (via a job signature) and resumes into it, reprocessing
+  only the lags that are still missing rather than starting over.
+- **GUI hygiene**: The GUI removes leftover (incomplete) STITCH temporary
+  directories on startup and again on quit, so no confidential intermediate lag
+  files persist across sessions.
 
 ## Data Requirements
 

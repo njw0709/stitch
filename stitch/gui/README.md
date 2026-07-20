@@ -70,26 +70,47 @@ python gui_app.py
      - Column consistency across all files
 
 4. **Configure Pipeline**
-   - Set ID column name
-   - Choose number of lags to compute
-   - Enable parallel processing for faster execution
-   - Select output directory and filename
-   - Review configuration summary
+   - Under "Temporal lag options", set the lag window as an inclusive range:
+     `Lags: [start] ~ [end] day prior`, with a live `(N lags)` helper showing
+     how many lag days will be processed
+   - Configure GEOID normalization (code vs. numeric, zero-padding)
+   - Under "Output Settings", select the output directory and filename, and
+     toggle parallel processing and "Include lag date columns in output"
+   - The "Add Job" button is always enabled; if required fields are missing or
+     the lag range is invalid, clicking it highlights the offending fields in
+     red and shows a validation message
 
-5. **Execute Pipeline**
-   - Review command that will be executed
-   - Click "Run Pipeline" to start
-   - Monitor real-time output
-   - Save log file if needed
-   - Open output directory when complete
+5. **Add the job to the queue and run**
+   - Completing the wizard adds the configured run to the dashboard queue via
+     the **Add Job** button; repeat the wizard to queue multiple jobs
+   - Use **Edit** / **Remove** to manage queued jobs, or open a job's output
+     directory
+   - Click **Run All** to execute all pending jobs **sequentially** in a single
+     modal progress dialog, with real-time output and live per-job status
+     (Running / Done / Failed)
+   - Save the log file if needed; already-run jobs are skipped on the next
+     **Run All** (edit a job to reset it to Pending)
+
+### Temporary files
+
+Intermediate per-lag files are written to a private, per-job directory in the
+operating system's temporary location (`$TMPDIR` / `/tmp`, or `%TEMP%` on
+Windows) with owner-only permissions — never in your output directory. A
+completed job deletes its temporary directory automatically; an interrupted run
+leaves it in place so an identical re-run can resume and reprocess only the
+missing lags. The dashboard also clears leftover STITCH temporary directories on
+startup and on quit. See the main [README](../../README.md#temporary-files-and-resuming)
+for details.
 
 ## Features
 
 - **Data Preview** - Preview data files before processing
 - **Automatic Validation** - Checks file formats, columns, and consistency
+- **Configurable Lag Window** - Choose an inclusive start/end day-prior range with a live lag count
+- **Job Queue** - Queue multiple jobs and run them sequentially with "Run All"
+- **Safe Temporary Files** - Private, owner-only temp dirs with auto-cleanup and resume-on-restart
 - **Progress Monitoring** - Real-time output from the pipeline
-- **Error Handling** - User-friendly error messages and validation
-- **Configuration Summary** - Review all settings before execution
+- **Error Handling** - Inline field highlighting and validation messages for missing/invalid inputs
 - **Cross-Platform** - Works on Windows, macOS, and Linux
 
 ## Architecture
@@ -148,7 +169,10 @@ def validate_custom_check(data) -> Tuple[bool, str]:
 ### Adding New Pages
 
 1. Create page class inheriting from `QWizardPage`
-2. Implement `isComplete()` method for validation
+2. Validate inputs by either implementing `isComplete()` (disables Next until
+   valid) or, to keep the button interactive and highlight missing fields on
+   click, returning `True` from `isComplete()` and implementing `validatePage()`
+   (see `pipeline_config_page.py` / `contextual_data_page.py`)
 3. Register fields with `registerField()`
 4. Add to main wizard in `main_window.py`
 
