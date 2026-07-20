@@ -25,8 +25,10 @@ from PyQt6.QtGui import QDesktopServices
 from stitch.gui.main_window import StitchMainWindow, JobConfigWizard, STATUS_COLORS
 from stitch.gui.pages.execution_page import ExecutionDialog
 from stitch.gui.job import (
+    Job,
     build_args_from_wizard,
     STATUS_PENDING,
+    STATUS_RUNNING,
     STATUS_DONE,
     STATUS_FAILED,
 )
@@ -245,9 +247,9 @@ def test_edit_job_prefill_round_trip(
         "geoid_n_digits",
         "geoid_numeric_type",
     ):
-        assert getattr(rebuilt, attr) == getattr(args, attr), (
-            f"{attr}: {getattr(rebuilt, attr)!r} != {getattr(args, attr)!r}"
-        )
+        assert getattr(rebuilt, attr) == getattr(
+            args, attr
+        ), f"{attr}: {getattr(rebuilt, attr)!r} != {getattr(args, attr)!r}"
 
 
 def test_edit_selected_updates_job_and_resets_status(
@@ -321,12 +323,8 @@ def test_open_output_opens_selected_job_dir(qtbot, tmp_path, monkeypatch):
 
     from stitch.gui.job import Job
 
-    window.jobs.append(
-        Job(name="A", args=argparse.Namespace(save_dir=str(dir_a)))
-    )
-    window.jobs.append(
-        Job(name="B", args=argparse.Namespace(save_dir=str(dir_b)))
-    )
+    window.jobs.append(Job(name="A", args=argparse.Namespace(save_dir=str(dir_a))))
+    window.jobs.append(Job(name="B", args=argparse.Namespace(save_dir=str(dir_b))))
     for job in window.jobs:
         window._add_job_item(job)
     window._refresh_buttons()
@@ -454,9 +452,7 @@ def _run_pending_via_dialog(window, qtbot, timeout=240000):
     ``start()`` + ``qtbot.waitUntil`` instead of the blocking ``exec()``.
     """
     run_items = [
-        (i, job)
-        for i, job in enumerate(window.jobs)
-        if job.status == STATUS_PENDING
+        (i, job) for i, job in enumerate(window.jobs) if job.status == STATUS_PENDING
     ]
     dialog = ExecutionDialog(run_items, window)
     dialog.job_status_changed.connect(window._on_job_status_changed)
@@ -566,3 +562,92 @@ def test_run_all_marks_failed_job(
     assert window.jobs[1].status == STATUS_FAILED
     assert _item_bg(window, 0) == STATUS_COLORS[STATUS_DONE][0].lower()
     assert _item_bg(window, 1) == STATUS_COLORS[STATUS_FAILED][0].lower()
+
+
+# ---------------------------------------------------------------------------
+# Stopping a running job (cooperative cancellation)
+# ---------------------------------------------------------------------------
+
+
+def test_run_pipeline_honors_cancellation(
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+):
+    """run_pipeline raises PipelineCancelled and writes no output when cancelled."""
+    from stitch.process import run_pipeline, PipelineCancelled
+
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    args = _make_job_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+        output_name="cancelled.dta",
+        n_lags=2,
+        parallel=False,
+    )
+
+    with pytest.raises(PipelineCancelled):
+        run_pipeline(args, should_cancel=lambda: True)
+
+    assert not (save_dir / "cancelled.dta").exists()
+
+
+def test_stop_cancels_current_job_and_leaves_rest_pending(qtbot, tmp_path, monkeypatch):
+    """Stop returns the running job to Pending and never starts later jobs."""
+    import time
+    from stitch.gui.pages import execution_page as ep
+
+    started = []
+
+    def fake_run_pipeline(job_args, should_cancel=None):
+        started.append(job_args.output_name)
+        # Block until cancellation is signalled via the cooperative flag.
+        for _ in range(2000):
+            if should_cancel is not None and should_cancel():
+                raise ep.PipelineCancelled("cancelled")
+            time.sleep(0.005)
+
+    monkeypatch.setattr(ep, "run_pipeline", fake_run_pipeline)
+
+    window = StitchMainWindow()
+    qtbot.addWidget(window)
+
+    for i in range(2):
+        args = argparse.Namespace(
+            survey_data="s",
+            context_dir="c",
+            save_dir=str(tmp_path),
+            output_name=f"job_{i}.dta",
+            n_lags=1,
+        )
+        window.jobs.append(Job(name=f"Job {i}", args=args, status=STATUS_PENDING))
+        window._add_job_item(window.jobs[-1])
+    window._refresh_buttons()
+
+    run_items = [(i, job) for i, job in enumerate(window.jobs)]
+    dialog = ExecutionDialog(run_items, window)
+    dialog.job_status_changed.connect(window._on_job_status_changed)
+    qtbot.addWidget(dialog)
+    dialog.start()
+
+    # Wait until the first job is actually running, then request stop.
+    qtbot.waitUntil(lambda: window.jobs[0].status == STATUS_RUNNING, timeout=5000)
+    dialog._on_stop_clicked()
+    qtbot.waitUntil(dialog.is_finished, timeout=5000)
+
+    # First job was stopped -> back to Pending; second job never started.
+    assert started == ["job_0.dta"]
+    assert dialog._cancelled == 1
+    assert window.jobs[0].status == STATUS_PENDING
+    assert window.jobs[1].status == STATUS_PENDING
+    assert _item_bg(window, 0) == STATUS_COLORS[STATUS_PENDING][0].lower()
+    assert _item_bg(window, 1) == STATUS_COLORS[STATUS_PENDING][0].lower()
+
+    # Dialog reflects the stopped state and can be closed.
+    assert dialog.close_button.isEnabled() is True
+    assert dialog.stop_button.isEnabled() is False

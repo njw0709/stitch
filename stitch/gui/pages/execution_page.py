@@ -29,8 +29,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
-from stitch.process import run_pipeline
+from stitch.process import run_pipeline, PipelineCancelled
 from stitch.gui.job import (
+    STATUS_PENDING,
     STATUS_RUNNING,
     STATUS_DONE,
     STATUS_FAILED,
@@ -89,6 +90,7 @@ class QueueRunner(QObject):
     job_started = pyqtSignal(int)  # row
     output = pyqtSignal(str)
     job_finished = pyqtSignal(int, bool, str)  # row, success, message
+    job_cancelled = pyqtSignal(int)  # row - job stopped mid-run, left pending
     finished = pyqtSignal()
 
     def __init__(self, run_items):
@@ -99,7 +101,18 @@ class QueueRunner(QObject):
         """Execute each job in order, redirecting its stdout/stderr to the log."""
         stream = EmittingStream(self.output)
 
+        # Poll this thread's Qt interruption flag; it is set from the GUI thread
+        # via ``QThread.requestInterruption()`` and is safe to read while the
+        # blocking pipeline call runs.
+        thread = QThread.currentThread()
+        should_cancel = thread.isInterruptionRequested
+
         for row, job in self._run_items:
+            # Don't start a new job if a stop was already requested; leave it
+            # (and every later job) pending so a later "Run All" picks them up.
+            if should_cancel():
+                break
+
             self.job_started.emit(row)
             try:
                 with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(
@@ -115,9 +128,16 @@ class QueueRunner(QObject):
                     self.output.emit(f"Number of lags: {job.args.n_lags}")
                     self.output.emit("")
 
-                    run_pipeline(job.args)
+                    run_pipeline(job.args, should_cancel=should_cancel)
 
                 self.job_finished.emit(row, True, "Pipeline completed successfully!")
+
+            except PipelineCancelled:
+                # Current job was stopped mid-run: report it as cancelled (the
+                # dashboard resets it to pending) and stop processing the queue.
+                self.output.emit(f"[STOPPED] {job.name} was stopped by the user.")
+                self.job_cancelled.emit(row)
+                break
 
             except Exception as e:  # noqa: BLE001 - surface any pipeline error
                 self.job_finished.emit(row, False, f"Error running pipeline: {str(e)}")
@@ -148,7 +168,9 @@ class ExecutionDialog(QDialog):
         self._completed = 0
         self._succeeded = 0
         self._failed = 0
+        self._cancelled = 0
         self._finished = False
+        self._stop_requested = False
 
         self.thread = None
         self.worker = None
@@ -174,6 +196,14 @@ class ExecutionDialog(QDialog):
         self.save_log_button.clicked.connect(self._save_log)
         button_layout.addWidget(self.save_log_button)
 
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setStyleSheet(
+            "background-color: #d9534f; color: white; font-weight: bold;"
+        )
+        self.stop_button.clicked.connect(self._on_stop_clicked)
+        self.stop_button.setEnabled(False)
+        button_layout.addWidget(self.stop_button)
+
         button_layout.addStretch()
 
         self.close_button = QPushButton("Close")
@@ -190,6 +220,7 @@ class ExecutionDialog(QDialog):
     def start(self):
         """Create the worker thread and begin running the queue."""
         self.status_label.setText(f"Running {self._total} job(s)...")
+        self.stop_button.setEnabled(True)
 
         self.thread = QThread(self)
         self.worker = QueueRunner(self._run_items)
@@ -199,12 +230,24 @@ class ExecutionDialog(QDialog):
         self.worker.job_started.connect(self._on_job_started)
         self.worker.output.connect(self._on_output)
         self.worker.job_finished.connect(self._on_job_finished)
+        self.worker.job_cancelled.connect(self._on_job_cancelled)
         self.worker.finished.connect(self._on_all_finished)
         self.worker.finished.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
 
         self.thread.start()
+
+    def _on_stop_clicked(self):
+        """Request the runner stop the current job and unwind the queue."""
+        if self.thread is not None and not self._finished:
+            self._stop_requested = True
+            self.thread.requestInterruption()
+            self.stop_button.setEnabled(False)
+            self.status_label.setText(
+                "Stopping current job... (waiting for a safe stopping point)"
+            )
+            self.output_text.append("[STOPPING] Stop requested by user...")
 
     def is_finished(self) -> bool:
         """True once the whole queue has finished running."""
@@ -228,11 +271,25 @@ class ExecutionDialog(QDialog):
         self.progress_bar.setValue(self._completed)
         self.job_status_changed.emit(row, STATUS_DONE if success else STATUS_FAILED)
 
+    def _on_job_cancelled(self, row: int):
+        """A job was stopped mid-run: return it to pending so it can rerun."""
+        self._cancelled += 1
+        self.job_status_changed.emit(row, STATUS_PENDING)
+
     def _on_all_finished(self):
         self._finished = True
-        summary = (
-            f"Queue finished: {self._succeeded} succeeded, {self._failed} failed."
-        )
+        self.stop_button.setEnabled(False)
+        if self._stop_requested:
+            not_run = self._total - self._completed - self._cancelled
+            summary = (
+                f"Stopped: {self._succeeded} succeeded, {self._failed} failed, "
+                f"{self._cancelled} stopped, {not_run} left pending. "
+                "Click 'Run All' again to resume."
+            )
+        else:
+            summary = (
+                f"Queue finished: {self._succeeded} succeeded, {self._failed} failed."
+            )
         self.status_label.setText(summary)
         self.close_button.setEnabled(True)
 

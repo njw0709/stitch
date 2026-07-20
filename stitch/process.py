@@ -1,11 +1,27 @@
 from pathlib import Path
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Callable
 import argparse
 import shutil
 import tempfile
 import uuid
 import pandas as pd
 from tqdm import tqdm
+
+
+class PipelineCancelled(Exception):
+    """Raised to abort a pipeline run when a cancellation was requested.
+
+    ``run_pipeline`` (and the lag-processing helpers) accept an optional
+    ``should_cancel`` callable. When it returns ``True`` at one of the
+    cooperative check points, this exception is raised so the run unwinds
+    cleanly (the ``finally`` block still removes temp files).
+    """
+
+
+def _raise_if_cancelled(should_cancel: Optional[Callable[[], bool]]) -> None:
+    """Raise :class:`PipelineCancelled` if *should_cancel* returns True."""
+    if should_cancel is not None and should_cancel():
+        raise PipelineCancelled("Pipeline run was cancelled by the user.")
 from .hrs import (
     HRSContextLinker,
     HRSInterviewData,
@@ -158,6 +174,7 @@ def process_multiple_lags_batch(
     geoid_col: Optional[str] = None,
     include_lag_date: bool = False,
     file_format: str = "parquet",
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> List[Path]:
     """
     Process multiple lags with batch optimization using pre-computed columns and filtering.
@@ -257,6 +274,7 @@ def process_multiple_lags_batch(
     # Step 4: Process each lag using pre-computed data
     temp_files = []
     for n in tqdm(n_days, desc="Processing lags", unit="lag"):
+        _raise_if_cancelled(should_cancel)
         print(f"  Processing lag {n}...")
 
         out_df = HRSContextLinker.output_merged_columns(
@@ -314,6 +332,7 @@ def process_multiple_lags_parallel(
     file_format: str = "parquet",
     max_workers: Optional[int] = None,
     auto_memory_limit: bool = True,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> List[Path]:
     """
     Process multiple lags with parallel processing using ProcessPoolExecutor.
@@ -507,6 +526,14 @@ def process_multiple_lags_parallel(
             desc="Processing lags",
             unit="lag",
         ):
+            # Cooperative cancellation: stop collecting, cancel any pending
+            # futures, and unwind. Already-running workers are allowed to finish
+            # their current lag but their results are discarded.
+            if should_cancel is not None and should_cancel():
+                print("  ⛔ Cancellation requested — stopping parallel processing...")
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise PipelineCancelled("Pipeline run was cancelled by the user.")
+
             n = futures[fut]
             try:
                 result = fut.result()
@@ -748,7 +775,10 @@ def _create_job_temp_dir(job_id: Optional[str] = None) -> Path:
     return Path(tempfile.mkdtemp(prefix=f"stitch_{job_id}_"))
 
 
-def run_pipeline(args: argparse.Namespace):
+def run_pipeline(
+    args: argparse.Namespace,
+    should_cancel: Optional[Callable[[], bool]] = None,
+):
     """
     Run the complete lagged contextual data linkage pipeline.
 
@@ -859,6 +889,8 @@ def run_pipeline(args: argparse.Namespace):
     print(f"Temporary lag files will be saved to a private directory: {temp_dir}")
 
     try:
+        _raise_if_cancelled(should_cancel)
+
         # Generate list of lags to process
         lags_to_process = list(range(args.n_lags))
 
@@ -874,6 +906,7 @@ def run_pipeline(args: argparse.Namespace):
                 geoid_col=args.geoid_col,
                 include_lag_date=args.include_lag_date,
                 file_format="parquet",
+                should_cancel=should_cancel,
             )
         else:
             print(f"Using batch processing for {args.n_lags} lags")
@@ -887,6 +920,7 @@ def run_pipeline(args: argparse.Namespace):
                 geoid_col=args.geoid_col,
                 include_lag_date=args.include_lag_date,
                 file_format="parquet",
+                should_cancel=should_cancel,
             )
 
         print(f"Finished processing {len(temp_files)} lag files")
@@ -907,6 +941,7 @@ def run_pipeline(args: argparse.Namespace):
         lag_cols = []
 
         for i, f in enumerate(temp_files):
+            _raise_if_cancelled(should_cancel)
             if (i + 1) % 100 == 0:
                 print(f"  Processed {i + 1}/{len(temp_files)} files...")
 
