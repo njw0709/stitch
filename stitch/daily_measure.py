@@ -186,7 +186,9 @@ class DailyMeasureData:
 
             # --- 4. Format columns ---
             if df[self.date_col].dtype != "datetime64[ns]":
-                df[self.date_col] = pd.to_datetime(df[self.date_col], errors="coerce")
+                df[self.date_col] = pd.to_datetime(
+                    df[self.date_col], errors="coerce", format="mixed"
+                )
             df[self.geoid_col] = normalize_geoid_for_processing(
                 df[self.geoid_col],
                 treatment=self.geoid_treatment,
@@ -259,7 +261,7 @@ class DailyMeasureData:
                     and df[self.date_col].dtype != "datetime64[ns]"
                 ):
                     df[self.date_col] = pd.to_datetime(
-                        df[self.date_col], errors="coerce"
+                        df[self.date_col], errors="coerce", format="mixed"
                     )
 
                 print(
@@ -305,7 +307,7 @@ class DailyMeasureData:
                 # --- 4. Format columns ---
                 if df[self.date_col].dtype != "datetime64[ns]":
                     df[self.date_col] = pd.to_datetime(
-                        df[self.date_col], errors="coerce"
+                        df[self.date_col], errors="coerce", format="mixed"
                     )
                 df[self.geoid_col] = normalize_geoid_for_processing(
                     df[self.geoid_col],

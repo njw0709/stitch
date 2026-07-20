@@ -278,7 +278,9 @@ class HRSInterviewData:
 
         # Normalize date column to datetime
         if datecol in self.df.columns:
-            self.df[datecol] = pd.to_datetime(self.df[datecol], errors="coerce")
+            self.df[datecol] = pd.to_datetime(
+                self.df[datecol], errors="coerce", format="mixed"
+            )
 
         # Normalize identifier type to integer (nullable) for consistent joins/lookups
         if self.hhidpn in self.df.columns:

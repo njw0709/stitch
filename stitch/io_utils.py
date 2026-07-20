@@ -288,7 +288,7 @@ def _sanitize_for_tabular(input_df: pd.DataFrame, mode: str = "string") -> pd.Da
     # Handle categoricals early to avoid downstream surprises
     for col_name in sanitized.columns:
         col = sanitized[col_name]
-        if pd.api.types.is_categorical_dtype(col):
+        if isinstance(col.dtype, pd.CategoricalDtype):
             sanitized[col_name] = col.astype("string").astype(object)
 
     # Datetime handling
