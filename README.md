@@ -5,9 +5,11 @@ STITCH is a Python-based interactive interface for linking diverse data sources 
 ## Features
 
 - **Lagged Data Linkage** - Compute n-day prior exposure over a configurable lag window (choose both the start and end day prior)
+- **Post-lag Averaging** - Optionally collapse the whole lag window into a single averaged column per measure (e.g. mean exposure over 0–364 days prior)
 - **Residential History Support** - Account for participant moves during study period
 - **Flexible Data Formats** - Supports CSV, Stata, Parquet, Feather, and Excel files
 - **Parallel Processing** - Optimized for large-scale datasets with multiprocessing in local environment
+- **Inspectable Intermediates** - Optionally keep the per-lag intermediate files as CSV in your output directory
 - **Two Interfaces** - Choose between CLI for automation or GUI for interactive use
 
 ## Installation
@@ -145,7 +147,9 @@ python stitch_cli.py \
 - `--n-lags`: Number of lag days to compute, i.e. the exclusive upper bound of the lag window (default: 365, so lags 0–364 days prior)
 - `--start-lag`: Lag day to start from, i.e. the minimum days prior (default: 0). Combined with `--n-lags`, the pipeline processes lags `start_lag`–`n_lags − 1` days prior
 - `--parallel`: Enable parallel processing
-- `--include-lag-date`: Include lag date columns in output
+- `--include-lag-date`: Include lag date columns in output. Ignored if `--post-lag-average` is also set (averaging wins)
+- `--post-lag-average`: Average each measure across all lags into a single column per measure (e.g. `HeatIndex_avg_0_364day_prior`) instead of one column per lag. Strict handling: a participant missing a value for **any** lag in the range gets a missing (NaN) average. Incompatible with `--include-lag-date`
+- `--save-temp-to-output`: Write the intermediate per-lag files as CSV into `<save-dir>/<output_stem>_lag_files/` and keep them after the run (default: hidden Parquet files in a private temp directory, deleted on success)
 
 ### Residential History Arguments
 
@@ -237,6 +241,60 @@ python stitch_cli.py \
     --parallel
 ```
 
+### Example 3: Post-lag Averaging (single averaged column per measure)
+
+Add `--post-lag-average` to collapse the entire lag window into one averaged
+column per measure instead of one column per lag day. Here the output contains a
+single `HeatIndex_avg_0_364day_prior` column holding each participant's mean heat
+index over the 0–364 days prior to their interview. Averaging is strict: if a
+participant is missing the value for any lag in the range, their average is
+missing (NaN). This option cannot be combined with `--include-lag-date` (it is
+ignored if both are given).
+
+```bash
+python stitch_cli.py \
+    --survey-data "data/survey2016.dta" \
+    --context-dir "data/heat_index" \
+    --measure-type heat_index \
+    --data-col HeatIndex \
+    --id-col hhidpn \
+    --date-col iwdate \
+    --geoid-col GEOID2010 \
+    --contextual-geoid-col GEOID10 \
+    --start-lag 0 \
+    --n-lags 365 \
+    --save-dir "output/heat" \
+    --post-lag-average \
+    --parallel
+```
+
+### Example 4: Saving the Intermediate Lag Files to the Output Directory
+
+Add `--save-temp-to-output` to keep the per-lag intermediate files as CSV so you
+can inspect them. Instead of hidden Parquet files in a private temporary
+directory (deleted on success), the lag files are written to
+`output/heat/surveyHeatLinked_lag_files/` (named `<save-dir>/<output_stem>_lag_files/`)
+and kept after the run. This can be combined with any other option, including
+`--post-lag-average`.
+
+```bash
+python stitch_cli.py \
+    --survey-data "data/survey2016.dta" \
+    --context-dir "data/heat_index" \
+    --output_name "surveyHeatLinked.dta" \
+    --measure-type heat_index \
+    --data-col HeatIndex \
+    --id-col hhidpn \
+    --date-col iwdate \
+    --geoid-col GEOID2010 \
+    --contextual-geoid-col GEOID10 \
+    --start-lag 0 \
+    --n-lags 365 \
+    --save-dir "output/heat" \
+    --save-temp-to-output \
+    --parallel
+```
+
 ## Performance
 
 - **Parallel Processing**: Recommended for datasets with 500+ lags
@@ -266,6 +324,18 @@ file before being merged into the final output.
 - **GUI hygiene**: The GUI removes leftover (incomplete) STITCH temporary
   directories on startup and again on quit, so no confidential intermediate lag
   files persist across sessions.
+
+### Keeping the intermediate files (`--save-temp-to-output`)
+
+If you want to inspect or archive the per-lag intermediate files, pass
+`--save-temp-to-output` (CLI) or check **"Save intermediate lag files to output
+directory (as CSV)"** (GUI). This changes the behavior above:
+
+- The lag files are written as **CSV** into `<save-dir>/<output_stem>_lag_files/`
+  (a subfolder next to your final output) instead of a hidden private directory.
+- They are **kept after a successful run** rather than deleted.
+- Note this places the intermediate files, which may contain confidential
+  information, inside your user-visible output directory — use it deliberately.
 
 ## Data Requirements
 

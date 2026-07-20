@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QTextEdit,
     QPushButton,
-    QApplication,
+    QStyle,
 )
 
 from ..widgets.file_picker import DirectoryPicker
@@ -98,6 +98,35 @@ class PipelineConfigPage(QWizardPage):
         self.parallel_checkbox.setChecked(True)
 
         self.include_lag_date_checkbox = QCheckBox("Include lag date columns in output")
+
+        self.post_lag_average_checkbox = QCheckBox(
+            "Post-lag averaging: average measure across all lags (single column per measure)"
+        )
+
+        # Small information icon whose tooltip explains the strict-NaN behavior.
+        self.post_lag_average_info = QLabel()
+        info_icon = self.style().standardIcon(
+            QStyle.StandardPixmap.SP_MessageBoxInformation
+        )
+        self.post_lag_average_info.setPixmap(info_icon.pixmap(16, 16))
+        self.post_lag_average_info.setToolTip(
+            "Averages each measure across all lags into a single column.\n"
+            "Strict handling: any participant missing a value for any lag in the "
+            "range will have a missing (NaN) average.\n"
+            "Incompatible with 'Include lag date columns'."
+        )
+
+        # Post-lag averaging and include-lag-date are mutually exclusive.
+        self.post_lag_average_checkbox.toggled.connect(
+            self._on_post_lag_average_toggled
+        )
+        self.include_lag_date_checkbox.toggled.connect(
+            self._on_include_lag_date_toggled
+        )
+
+        self.save_temp_checkbox = QCheckBox(
+            "Save intermediate lag files to output directory (as CSV)"
+        )
 
         exec_group.setLayout(exec_layout)
         layout.addWidget(exec_group)
@@ -223,6 +252,14 @@ class PipelineConfigPage(QWizardPage):
         output_layout.addRow("", self.parallel_checkbox)
         output_layout.addRow("", self.include_lag_date_checkbox)
 
+        post_lag_row = QHBoxLayout()
+        post_lag_row.addWidget(self.post_lag_average_checkbox)
+        post_lag_row.addWidget(self.post_lag_average_info)
+        post_lag_row.addStretch()
+        output_layout.addRow("", post_lag_row)
+
+        output_layout.addRow("", self.save_temp_checkbox)
+
         output_group.setLayout(output_layout)
         layout.addWidget(output_group)
 
@@ -250,6 +287,8 @@ class PipelineConfigPage(QWizardPage):
         self.registerField("end_lag", self.end_lag_spin)
         self.registerField("parallel", self.parallel_checkbox)
         self.registerField("include_lag_date", self.include_lag_date_checkbox)
+        self.registerField("post_lag_average", self.post_lag_average_checkbox)
+        self.registerField("save_temp_to_output", self.save_temp_checkbox)
         self.registerField("save_dir*", self.save_dir_picker.path_edit)
         self.registerField("output_name*", self.output_name_edit)
         self.registerField("geoid_treatment", self._geoid_treatment_edit)
@@ -380,6 +419,16 @@ class PipelineConfigPage(QWizardPage):
     def _on_zero_pad_toggled(self, _state: int):
         self.n_digits_spin.setEnabled(self.zero_pad_checkbox.isChecked())
 
+    def _on_post_lag_average_toggled(self, checked: bool):
+        """Averaging is incompatible with per-lag date columns; disable that option."""
+        if checked:
+            self.include_lag_date_checkbox.setChecked(False)
+        self.include_lag_date_checkbox.setEnabled(not checked)
+
+    def _on_include_lag_date_toggled(self, checked: bool):
+        """Per-lag date columns are incompatible with averaging; disable that option."""
+        self.post_lag_average_checkbox.setEnabled(not checked)
+
     def _sync_treatment_field(self, index: int):
         self._geoid_treatment_edit.setText("code" if index == 0 else "numeric")
 
@@ -436,6 +485,12 @@ class PipelineConfigPage(QWizardPage):
         self.parallel_checkbox.setChecked(bool(getattr(args, "parallel", True)))
         self.include_lag_date_checkbox.setChecked(
             bool(getattr(args, "include_lag_date", False))
+        )
+        self.post_lag_average_checkbox.setChecked(
+            bool(getattr(args, "post_lag_average", False))
+        )
+        self.save_temp_checkbox.setChecked(
+            bool(getattr(args, "save_temp_to_output", False))
         )
 
         save_dir = getattr(args, "save_dir", "") or ""

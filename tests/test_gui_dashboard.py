@@ -72,6 +72,8 @@ def _make_job_args(
         start_lag=start_lag,
         parallel=parallel,
         include_lag_date=False,
+        post_lag_average=False,
+        save_temp_to_output=False,
         geoid_treatment="code",
         geoid_n_digits=11,
         geoid_numeric_type="int",
@@ -246,6 +248,8 @@ def test_edit_job_prefill_round_trip(
         "start_lag",
         "parallel",
         "include_lag_date",
+        "post_lag_average",
+        "save_temp_to_output",
         "geoid_treatment",
         "geoid_n_digits",
         "geoid_numeric_type",
@@ -284,6 +288,37 @@ def test_pipeline_config_lag_range_validation(qtbot, tmp_path):
     assert page.validatePage() is True
     assert page.start_lag_spin.styleSheet() == ""
     assert page.lag_count_label.text() == "(5 lags)"
+
+
+def test_post_lag_average_and_include_lag_date_mutually_exclusive(qtbot):
+    """Checking averaging disables/unchecks include-lag-date and vice versa."""
+    from stitch.gui.pages.pipeline_config_page import PipelineConfigPage
+
+    page = PipelineConfigPage()
+    qtbot.addWidget(page)
+
+    # The info icon exposes the strict-NaN explanation on hover.
+    assert page.post_lag_average_info.toolTip().strip() != ""
+
+    # Both start enabled and unchecked.
+    assert page.post_lag_average_checkbox.isEnabled()
+    assert page.include_lag_date_checkbox.isEnabled()
+
+    # Enabling averaging unchecks + disables include-lag-date.
+    page.include_lag_date_checkbox.setChecked(True)
+    page.post_lag_average_checkbox.setChecked(True)
+    assert page.include_lag_date_checkbox.isChecked() is False
+    assert page.include_lag_date_checkbox.isEnabled() is False
+
+    # Turning averaging back off re-enables include-lag-date.
+    page.post_lag_average_checkbox.setChecked(False)
+    assert page.include_lag_date_checkbox.isEnabled() is True
+
+    # Symmetric: enabling include-lag-date disables averaging.
+    page.include_lag_date_checkbox.setChecked(True)
+    assert page.post_lag_average_checkbox.isEnabled() is False
+    page.include_lag_date_checkbox.setChecked(False)
+    assert page.post_lag_average_checkbox.isEnabled() is True
 
 
 def test_pipeline_config_highlights_missing_fields(qtbot):

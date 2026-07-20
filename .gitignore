@@ -15,3 +15,6 @@ local_scripts/
 #data files
 *.dta
 *.csv
+
+# test files
+tests/test_data/

@@ -22,6 +22,15 @@ python stitch_cli.py \
     --file-extension .parquet \
     --parallel
 
+Averaging across lags:
+----------------------
+Add ``--post-lag-average`` to collapse the per-lag measure columns into a single
+averaged column per measure (e.g. ``HeatIndex_avg_0_2190day_prior``). This is
+strict: any participant missing a value for any lag in the range gets a missing
+(NaN) average. It is incompatible with ``--include-lag-date`` (which is ignored
+when both are given). Add ``--save-temp-to-output`` to keep the intermediate
+per-lag files as CSV under ``<save-dir>/<output_stem>_lag_files/``.
+
 With residential history:
 -------------------------
 The residential history file is a simple long-format table with one row per
@@ -152,7 +161,23 @@ def _create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--include-lag-date",
         action="store_true",
-        help="Include lag date columns in the output (default: False)",
+        help="Include lag date columns in the output (default: False). "
+        "Ignored if --post-lag-average is also set (averaging wins).",
+    )
+    parser.add_argument(
+        "--post-lag-average",
+        action="store_true",
+        help="Average each measure across all lags into a single column per "
+        "measure (e.g. HeatIndex_avg_0_365day_prior) instead of one column per "
+        "lag. Strict: a participant missing any lag gets a missing (NaN) average. "
+        "Incompatible with --include-lag-date (which is ignored if both are set).",
+    )
+    parser.add_argument(
+        "--save-temp-to-output",
+        action="store_true",
+        help="Write the intermediate per-lag files as CSV into "
+        "<save-dir>/<output_stem>_lag_files/ and keep them after the run "
+        "(default: hidden Parquet files in a private temp dir, deleted on success).",
     )
 
     # GEOID normalization options

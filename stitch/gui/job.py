@@ -47,6 +47,8 @@ def build_args_from_wizard(wizard) -> argparse.Namespace:
         context_date_col=wizard.field("context_date_col"),
         parallel=wizard.field("parallel"),
         include_lag_date=wizard.field("include_lag_date"),
+        post_lag_average=wizard.field("post_lag_average"),
+        save_temp_to_output=wizard.field("save_temp_to_output"),
     )
 
     # Temporal lag window: GUI presents an inclusive [start, end] range in days

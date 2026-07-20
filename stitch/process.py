@@ -878,6 +878,116 @@ def cleanup_stitch_temp_dirs() -> None:
             shutil.rmtree(candidate, ignore_errors=True)
 
 
+def _merge_lag_averages(
+    temp_files: List[Path],
+    base_df: pd.DataFrame,
+    args: argparse.Namespace,
+    read_fn: Callable[[Path], pd.DataFrame],
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> pd.DataFrame:
+    """Collapse per-lag files into a single strict-mean column per measure.
+
+    Reads one lag file at a time (a running sum plus a count per measure column)
+    so peak memory stays flat regardless of how many lags were processed -- no
+    list of per-lag frames and no wide concatenation is ever materialized.
+
+    "Strict" averaging: because summation propagates ``NaN``, any participant
+    that is missing the value for *any* lag ends up with ``NaN`` for the mean.
+
+    Parameters
+    ----------
+    temp_files : List[Path]
+        Per-lag files, each holding ``id_col`` plus one value column per measure
+        named ``{measure}_{date_col}_{n}day_prior``.
+    base_df : pd.DataFrame
+        The main HRS dataframe the averaged columns are appended to.
+    args : argparse.Namespace
+        Pipeline configuration (uses ``id_col``, ``data_col``, ``date_col``,
+        ``start_lag`` and ``n_lags``).
+    read_fn : Callable[[Path], pd.DataFrame]
+        Format-aware reader (``pd.read_parquet`` or ``pd.read_csv``).
+    should_cancel : Callable[[], bool], optional
+        Cooperative cancellation check.
+
+    Returns
+    -------
+    pd.DataFrame
+        ``base_df`` with one appended column ``{measure}_avg_{start}_{end}day_prior``
+        per measure.
+    """
+    id_col = args.id_col
+    if isinstance(args.data_col, str):
+        data_cols = [c.strip() for c in args.data_col.split(",")]
+    else:
+        data_cols = list(args.data_col)
+
+    n_rows = len(base_df)
+    ids_ref = base_df[id_col].values
+
+    sums: dict[str, pd.Series] = {}
+    counts: dict[str, int] = {}
+
+    for i, f in enumerate(temp_files):
+        _raise_if_cancelled(should_cancel)
+        if (i + 1) % 100 == 0:
+            print(f"  Averaged {i + 1}/{len(temp_files)} files...")
+
+        lag_df = read_fn(f)
+
+        # --- Safety checks (mirror the non-averaged merge path) ---
+        if len(lag_df) != n_rows:
+            raise ValueError(
+                f"Row count mismatch in lag file {f}: "
+                f"{len(lag_df)} rows vs {n_rows} in main df"
+            )
+
+        ids_right = lag_df[id_col].values
+        if not (ids_ref == ids_right).all():
+            if set(ids_ref) != set(ids_right):
+                raise ValueError(
+                    f"ID set mismatch in lag file {f}: "
+                    "the lag file has different IDs than the main df"
+                )
+            raise ValueError(
+                f"ID order mismatch in lag file {f}: "
+                "IDs match as a set but not row order"
+            )
+        # --- End safety checks ---
+
+        n = int(f.stem.split("_lag_")[1])
+        for col in data_cols:
+            val_col = f"{col}_{args.date_col}_{n}day_prior"
+            if val_col not in lag_df.columns:
+                continue
+            values = pd.to_numeric(lag_df[val_col], errors="coerce").reset_index(
+                drop=True
+            )
+            if col not in sums:
+                sums[col] = values
+                counts[col] = 1
+            else:
+                # NaN-propagating addition gives the strict-mean semantics.
+                sums[col] = sums[col] + values
+                counts[col] += 1
+
+        del lag_df
+
+    start_lag = int(getattr(args, "start_lag", 0) or 0)
+    max_lag = int(args.n_lags) - 1
+
+    avg_cols: dict[str, pd.Series] = {}
+    for col in data_cols:
+        if counts.get(col, 0) == 0:
+            continue
+        avg_name = f"{col}_avg_{start_lag}_{max_lag}day_prior"
+        avg_cols[avg_name] = sums[col] / counts[col]
+
+    return pd.concat(
+        [base_df.reset_index(drop=True), pd.DataFrame(avg_cols, index=range(n_rows))],
+        axis=1,
+    )
+
+
 def run_pipeline(
     args: argparse.Namespace,
     should_cancel: Optional[Callable[[], bool]] = None,
@@ -924,6 +1034,32 @@ def run_pipeline(
     if not context_dir.exists():
         raise FileNotFoundError(f"Contextual data directory not found: {context_dir}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    post_lag_average = bool(getattr(args, "post_lag_average", False))
+    save_temp_to_output = bool(getattr(args, "save_temp_to_output", False))
+    include_lag_date = bool(getattr(args, "include_lag_date", False))
+
+    # Post-lag averaging collapses every lag into a single averaged column per
+    # measure, which makes per-lag date columns meaningless. If the user asks for
+    # both, averaging wins and include_lag_date is ignored (with a warning) rather
+    # than aborting the run.
+    if post_lag_average and include_lag_date:
+        print(
+            "⚠️  include_lag_date=True is ignored because post-lag averaging is "
+            "enabled (averaging collapses all lags into a single column)."
+        )
+        include_lag_date = False
+
+    if post_lag_average:
+        print(
+            "⚠️  Post-lag averaging uses strict handling: any participant missing a "
+            "value for any lag in the selected range will have a missing (NaN) average."
+        )
+
+    # When requested, intermediate lag files are written as CSV into the user's
+    # output directory (and kept as a deliverable) instead of the default hidden,
+    # auto-cleaned Parquet files in a private OS-temp directory.
+    file_format = "csv" if save_temp_to_output else "parquet"
 
     geoid_n_digits = getattr(args, "geoid_n_digits", 11)
     geoid_treatment = getattr(args, "geoid_treatment", "code")
@@ -994,14 +1130,25 @@ def run_pipeline(
     # into it, reprocessing only the lags that are still missing. Completed jobs
     # delete their temp dir, so any match is by construction incomplete.
     signature_hash = _job_signature(args)
-    temp_dir = _find_resumable_temp_dir(args, signature_hash)
-    if temp_dir is not None:
-        print(f"Resuming previous job from private directory: {temp_dir}")
-    else:
-        temp_dir = _create_job_temp_dir(signature_hash)
+    if save_temp_to_output:
+        # Persist the intermediate lag files (as CSV) next to the output file so
+        # the user can inspect/keep them. A rerun resumes via the per-lag file
+        # existence check below rather than the OS-temp signature discovery.
+        temp_dir = out_path.parent / f"{out_path.stem}_lag_files"
+        temp_dir.mkdir(parents=True, exist_ok=True)
         print(
-            f"Temporary lag files will be saved to a private directory: {temp_dir}"
+            f"Intermediate lag files will be saved as CSV to the output "
+            f"directory: {temp_dir}"
         )
+    else:
+        temp_dir = _find_resumable_temp_dir(args, signature_hash)
+        if temp_dir is not None:
+            print(f"Resuming previous job from private directory: {temp_dir}")
+        else:
+            temp_dir = _create_job_temp_dir(signature_hash)
+            print(
+                f"Temporary lag files will be saved to a private directory: {temp_dir}"
+            )
     _write_job_args(temp_dir, args, signature_hash)
 
     try:
@@ -1009,7 +1156,7 @@ def run_pipeline(
 
         # Resume support: skip lags whose temp file already exists.
         def _lag_file(n: int) -> Path:
-            return temp_dir / f"{args.measure_type}_lag_{n:04d}.parquet"
+            return temp_dir / f"{args.measure_type}_lag_{n:04d}.{file_format}"
 
         start_lag = int(getattr(args, "start_lag", 0) or 0)
         lags_to_process = [
@@ -1035,8 +1182,8 @@ def run_pipeline(
                 temp_dir=temp_dir,
                 prefix=args.measure_type,
                 geoid_col=args.geoid_col,
-                include_lag_date=args.include_lag_date,
-                file_format="parquet",
+                include_lag_date=include_lag_date,
+                file_format=file_format,
                 should_cancel=should_cancel,
             )
         else:
@@ -1049,8 +1196,8 @@ def run_pipeline(
                 temp_dir=temp_dir,
                 prefix=args.measure_type,
                 geoid_col=args.geoid_col,
-                include_lag_date=args.include_lag_date,
-                file_format="parquet",
+                include_lag_date=include_lag_date,
+                file_format=file_format,
                 should_cancel=should_cancel,
             )
 
@@ -1060,62 +1207,80 @@ def run_pipeline(
         # Collect every lag file present in the temp dir (previously-resumed and
         # newly-written), filtered to this measure type and sorted by lag.
         temp_files = sorted(
-            temp_dir.glob(f"{args.measure_type}_lag_*.parquet"),
+            temp_dir.glob(f"{args.measure_type}_lag_*.{file_format}"),
             key=lambda f: int(f.stem.split("_lag_")[1]),
         )
 
-        # Merge all lag outputs
-        print(f"Merging {len(temp_files)} lag outputs with main HRS data...")
-        final_df = hrs_epi_data.df
+        # Format-aware reader so the merge composes with the CSV output option.
+        read_lag = pd.read_csv if file_format == "csv" else pd.read_parquet
 
-        # Collect all “lag” columns to concatenate at once
-        lag_cols = []
+        if post_lag_average:
+            # Stream one lag file at a time, accumulating a strict per-measure
+            # mean, so memory stays flat regardless of the number of lags.
+            print(
+                f"Averaging {len(temp_files)} lag outputs into one column per "
+                "measure..."
+            )
+            final_df = _merge_lag_averages(
+                temp_files,
+                hrs_epi_data.df,
+                args,
+                read_lag,
+                should_cancel=should_cancel,
+            )
+        else:
+            # Merge all lag outputs
+            print(f"Merging {len(temp_files)} lag outputs with main HRS data...")
+            final_df = hrs_epi_data.df
 
-        for i, f in enumerate(temp_files):
-            _raise_if_cancelled(should_cancel)
-            if (i + 1) % 100 == 0:
-                print(f"  Processed {i + 1}/{len(temp_files)} files...")
+            # Collect all “lag” columns to concatenate at once
+            lag_cols = []
 
-            lag_df = pd.read_parquet(f)
+            for i, f in enumerate(temp_files):
+                _raise_if_cancelled(should_cancel)
+                if (i + 1) % 100 == 0:
+                    print(f"  Processed {i + 1}/{len(temp_files)} files...")
 
-            # --- Safety checks ---
-            # 1. Matching number of rows
-            if len(lag_df) != len(final_df):
-                raise ValueError(
-                    f"Row count mismatch in lag file {f}: "
-                    f"{len(lag_df)} rows vs {len(final_df)} in main df"
-                )
+                lag_df = read_lag(f)
 
-            # 2. Same IDs AND same order
-            ids_left = final_df[args.id_col].values
-            ids_right = lag_df[args.id_col].values
-
-            if not (ids_left == ids_right).all():
-                # To disambiguate, tell the user whether it's order mismatch or ID mismatch
-                if set(ids_left) != set(ids_right):
+                # --- Safety checks ---
+                # 1. Matching number of rows
+                if len(lag_df) != len(final_df):
                     raise ValueError(
-                        f"ID set mismatch in lag file {f}: "
-                        "the lag file has different IDs than the main df"
-                    )
-                else:
-                    raise ValueError(
-                        f"ID order mismatch in lag file {f}: "
-                        "IDs match as a set but not row order"
+                        f"Row count mismatch in lag file {f}: "
+                        f"{len(lag_df)} rows vs {len(final_df)} in main df"
                     )
 
-            # --- End safety checks ---
+                # 2. Same IDs AND same order
+                ids_left = final_df[args.id_col].values
+                ids_right = lag_df[args.id_col].values
 
-            # Drop the id_col from the lag dataframe; we already have it in final_df
-            lag_df = lag_df.drop(columns=[args.id_col], errors="ignore")
+                if not (ids_left == ids_right).all():
+                    # To disambiguate, tell the user whether it's order mismatch or ID mismatch
+                    if set(ids_left) != set(ids_right):
+                        raise ValueError(
+                            f"ID set mismatch in lag file {f}: "
+                            "the lag file has different IDs than the main df"
+                        )
+                    else:
+                        raise ValueError(
+                            f"ID order mismatch in lag file {f}: "
+                            "IDs match as a set but not row order"
+                        )
 
-            lag_cols.append(lag_df)
+                # --- End safety checks ---
 
-        # Now concatenate all collected columns at once horizontally
-        final_df = pd.concat(
-            [final_df.reset_index(drop=True)]
-            + [df.reset_index(drop=True) for df in lag_cols],
-            axis=1,
-        )
+                # Drop the id_col from the lag dataframe; we already have it in final_df
+                lag_df = lag_df.drop(columns=[args.id_col], errors="ignore")
+
+                lag_cols.append(lag_df)
+
+            # Now concatenate all collected columns at once horizontally
+            final_df = pd.concat(
+                [final_df.reset_index(drop=True)]
+                + [df.reset_index(drop=True) for df in lag_cols],
+                axis=1,
+            )
 
         # Apply final GEOID normalization based on user config
         base_geoid = args.geoid_col
@@ -1151,5 +1316,10 @@ def run_pipeline(
         raise
     else:
         # Only a fully successful run removes the private temp directory (and any
-        # confidential lag files it holds).
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        # confidential lag files it holds). When the user opted to save the
+        # intermediate lag files to the output directory, keep them as the
+        # requested deliverable instead of deleting them.
+        if not save_temp_to_output:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        else:
+            print(f"Intermediate lag files kept in: {temp_dir}")
