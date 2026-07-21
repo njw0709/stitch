@@ -134,7 +134,7 @@ class PipelineConfigPage(QWizardPage):
         )
 
         self.post_lag_average_checkbox = QCheckBox(
-            "Post-lag averaging: average measure across all lags (single column per measure)"
+            "Post-linkage averaging: average measure across all lags"
         )
 
         # Small information icon whose tooltip explains the strict-NaN behavior.
@@ -319,9 +319,7 @@ class PipelineConfigPage(QWizardPage):
         # Register fields
         self.registerField("start_lag", self.start_lag_spin)
         self.registerField("end_lag", self.end_lag_spin)
-        self.registerField(
-            "linkage_resolution", self.resolution_combo, "currentText"
-        )
+        self.registerField("linkage_resolution", self.resolution_combo, "currentText")
         self.registerField("agg_method", self.agg_method_combo, "currentText")
         self.registerField("parallel", self.parallel_checkbox)
         self.registerField("include_lag_date", self.include_lag_date_checkbox)
@@ -413,9 +411,7 @@ class PipelineConfigPage(QWizardPage):
     # GEOID sampling
     # ------------------------------------------------------------------
 
-    def _sample_unique_geoids(
-        self, file_path: str, col_name: str, n: int = 3
-    ) -> list:
+    def _sample_unique_geoids(self, file_path: str, col_name: str, n: int = 3) -> list:
         """Read a small preview from *file_path* and return up to *n* unique raw values.
 
         Returns values in their original types (float, int, str) so the preview
