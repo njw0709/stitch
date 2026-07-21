@@ -145,9 +145,9 @@ def test_build_args_maps_resolution_and_agg(qtbot):
     page = _pipeline_page(wizard)
     page.initializePage()
     page._set_resolution(LinkageResolution.MONTHLY)
-    midpoint_idx = page.agg_method_combo.findData("midpoint")
-    page.agg_method_combo.setCurrentIndex(midpoint_idx)
+    median_idx = page.agg_method_combo.findData("median")
+    page.agg_method_combo.setCurrentIndex(median_idx)
 
     args = build_args_from_wizard(wizard)
     assert LinkageResolution.from_str(args.linkage_resolution) is LinkageResolution.MONTHLY
-    assert AggMethod.from_str(args.agg_method) is AggMethod.MIDPOINT
+    assert AggMethod.from_str(args.agg_method) is AggMethod.MEDIAN

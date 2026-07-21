@@ -145,7 +145,7 @@ python stitch_cli.py \
 - `--contextual-geoid-col`: GEOID column name in contextual data files (default: GEOID10)
 - `--file-extension`: File extension to search for (e.g., .csv, .parquet)
 - `--linkage-resolution`: Temporal resolution for linkage — `hourly`, `daily`, or `monthly` (default: `daily`). This sets the unit for lags (hours / days / months) and the granularity of the match. It **must not be finer than the contextual data's own resolution** (see [Linkage Resolution](#linkage-resolution))
-- `--agg-method`: How to reconcile the contextual data when the requested resolution is **coarser** than the data — `average` (mean within each period) or `midpoint` (the observation nearest the period midpoint) (default: `average`). Ignored when the resolution matches the data
+- `--agg-method`: How to reconcile the contextual data when the requested resolution is **coarser** than the data — `average` (mean within each period) or `median` (median within each period) (default: `average`). Ignored when the resolution matches the data
 - `--n-lags`: Number of lags to compute, i.e. the exclusive upper bound of the lag window, in the linkage-resolution unit (default: 365, e.g. lags 0–364 days prior at daily resolution)
 - `--start-lag`: Lag to start from, i.e. the minimum periods prior in the linkage-resolution unit (default: 0). Combined with `--n-lags`, the pipeline processes lags `start_lag`–`n_lags − 1` (e.g. months prior at monthly resolution)
 - `--parallel`: Enable parallel processing
@@ -188,8 +188,8 @@ hourly  <  daily  <  monthly      (finest → coarsest)
 - When the requested resolution is **coarser** than the data, the contextual
   data is **aggregated up** using `--agg-method`:
   - `average`: mean of the measure within each period (per GEOID).
-  - `midpoint`: the single observation nearest the period midpoint (e.g. noon
-    for hourly→daily, mid-month for →monthly).
+  - `median`: median of the measure within each period (per GEOID); robust to
+    outliers.
 - When the requested resolution **matches** the data, an exact match is used and
   the aggregation method is ignored.
 
@@ -356,8 +356,8 @@ month and year, or when you want month-level lags. Lags are counted in
 **months**, so this processes lags 0–11 months prior and produces columns like
 `HeatIndex_iwdate_0month_prior` … `HeatIndex_iwdate_11month_prior`. Because the
 daily heat data is coarser-mapped to months, `--agg-method average` collapses
-each month's daily values into a single monthly mean (use `midpoint` to instead
-pick the mid-month observation). Coarse interview dates (e.g. `2016-06`) are
+each month's daily values into a single monthly mean (use `median` to instead
+take each month's median). Coarse interview dates (e.g. `2016-06`) are
 anchored to the mid-month automatically.
 
 ```bash

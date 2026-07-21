@@ -190,23 +190,25 @@ def test_aggregate_daily_to_monthly_average():
     assert out["v"].iloc[0] == pytest.approx(14.5)
 
 
-def test_aggregate_hourly_to_daily_midpoint():
+def test_aggregate_hourly_to_daily_median():
+    # 23 small values plus one large outlier: median is robust, mean is not.
     ts = pd.date_range("2020-01-01 00:00", periods=24, freq="h")
-    df = pd.DataFrame(
-        {"Date": list(ts), "GEOID10": "01001020100", "v": [float(i) for i in range(24)]}
-    )
+    values = [float(i) for i in range(23)] + [1000.0]
+    df = pd.DataFrame({"Date": list(ts), "GEOID10": "01001020100", "v": values})
     out = aggregate_contextual_to_resolution(
         df,
         date_col="Date",
         geoid_col="GEOID10",
         data_cols="v",
         resolution=LinkageResolution.DAILY,
-        method=AggMethod.MIDPOINT,
+        method=AggMethod.MEDIAN,
     )
     assert len(out) == 1
     assert out["Date"].iloc[0] == pd.Timestamp("2020-01-01")
-    # midpoint = noon -> hour 12 value.
-    assert out["v"].iloc[0] == pytest.approx(12.0)
+    # median of [0..22, 1000] -> the 12th of 24 sorted values = 11.5,
+    # distinct from the outlier-inflated mean.
+    assert out["v"].iloc[0] == pytest.approx(11.5)
+    assert out["v"].iloc[0] != pytest.approx(float(sum(values)) / len(values))
 
 
 def test_prepare_contextual_rejects_finer_than_data():

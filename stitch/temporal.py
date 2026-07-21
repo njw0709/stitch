@@ -102,7 +102,7 @@ class AggMethod(str, Enum):
     """How contextual data is reconciled when coarsened to a coarser resolution."""
 
     AVERAGE = "average"
-    MIDPOINT = "midpoint"
+    MEDIAN = "median"
 
     @classmethod
     def from_str(cls, value) -> "AggMethod":

@@ -17,17 +17,6 @@ FILENAME_TO_VARNAME_DICT = {
 }
 
 
-def _period_midpoint(floored: pd.Series, resolution: LinkageResolution) -> pd.Series:
-    """Midpoint timestamp of each period whose start is ``floored``."""
-    if resolution is LinkageResolution.HOURLY:
-        return floored + pd.Timedelta(minutes=30)
-    if resolution is LinkageResolution.DAILY:
-        return floored + pd.Timedelta(hours=12)
-    # Monthly: midpoint depends on the calendar length of each month.
-    month_end = floored + pd.DateOffset(months=1)
-    return floored + (month_end - floored) / 2
-
-
 def aggregate_contextual_to_resolution(
     df: pd.DataFrame,
     *,
@@ -44,8 +33,8 @@ def aggregate_contextual_to_resolution(
     reconciled by ``method``:
 
     - ``average``: mean of each data column within the bucket.
-    - ``midpoint``: the single observation nearest the period midpoint
-      (e.g. noon for daily, mid-month for monthly).
+    - ``median``: median of each data column within the bucket (robust to
+      outliers; deterministic).
 
     The returned frame has columns ``[date_col, geoid_col, *data_cols]`` with
     one row per ``(period, GEOID)``. When the data is already at the requested
@@ -57,29 +46,15 @@ def aggregate_contextual_to_resolution(
         data_cols = [data_cols]
 
     work = df.copy()
-    floored = resolution.floor(work[date_col])
+    work[date_col] = resolution.floor(work[date_col])
 
-    if method is AggMethod.AVERAGE:
-        work[date_col] = floored
-        grouped = (
-            work.groupby([date_col, geoid_col], observed=True)[data_cols]
-            .mean()
-            .reset_index()
-        )
-        return grouped
-
-    # Midpoint: pick the observation closest to the period midpoint.
-    mid = _period_midpoint(floored, resolution)
-    work = work.assign(
-        _period_key=floored,
-        _dist=(work[date_col] - mid).abs(),
+    agg = "mean" if method is AggMethod.AVERAGE else "median"
+    grouped = (
+        work.groupby([date_col, geoid_col], observed=True)[data_cols]
+        .agg(agg)
+        .reset_index()
     )
-    work = work.sort_values("_dist")
-    picked = work.drop_duplicates(subset=["_period_key", geoid_col], keep="first")
-    picked = picked.copy()
-    picked[date_col] = picked["_period_key"]
-    out_cols = [date_col, geoid_col] + list(data_cols)
-    return picked[out_cols].reset_index(drop=True)
+    return grouped
 
 
 class DailyMeasureData:

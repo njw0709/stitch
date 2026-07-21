@@ -13,7 +13,7 @@ Three independent inputs carry a temporal resolution:
 
 Plus the **linkage resolution** the user chooses (hourly / daily / monthly),
 which must not be finer than the contextual data. When coarser than the data,
-the data is aggregated up (average / midpoint).
+the data is aggregated up (average / median).
 
 The tests below walk every resolution of each source and every valid/invalid
 (contextual x linkage) combination.
@@ -240,7 +240,7 @@ def test_residential_history_mixed_resolution_ordering_and_lookup(tmp_path):
 # ===========================================================================
 #
 # Valid when linkage resolution is not finer than the contextual data. When
-# coarser, the contextual data is aggregated up (average/midpoint).
+# coarser, the contextual data is aggregated up (average/median).
 
 
 def _run_linkage(tmp_path, ctx_builder, iwdate, resolution, agg="average", lags=(0, 1)):
@@ -286,10 +286,10 @@ def test_hourly_ctx_daily_link_average(tmp_path):
     assert _val(out, 1, "day") == np.mean(range(0, 24))  # 11.5
 
 
-def test_hourly_ctx_daily_link_midpoint(tmp_path):
-    out = _run_linkage(tmp_path, _ctx_hourly, "2016-06-15", "daily", agg="midpoint")
-    assert _val(out, 0, "day") == 112.0  # noon of day 15 -> 100 + 12
-    assert _val(out, 1, "day") == 12.0  # noon of day 14 -> 12
+def test_hourly_ctx_daily_link_median(tmp_path):
+    out = _run_linkage(tmp_path, _ctx_hourly, "2016-06-15", "daily", agg="median")
+    assert _val(out, 0, "day") == np.median(range(100, 124))  # 111.5
+    assert _val(out, 1, "day") == np.median(range(0, 24))  # 11.5
 
 
 def test_hourly_ctx_monthly_link_average(tmp_path):

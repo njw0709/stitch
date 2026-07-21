@@ -34,7 +34,7 @@ def test_linkage_resolution_override(res):
     assert args.linkage_resolution == res
 
 
-@pytest.mark.parametrize("method", ["average", "midpoint"])
+@pytest.mark.parametrize("method", ["average", "median"])
 def test_agg_method_override(method):
     args = _create_parser().parse_args(_REQUIRED + ["--agg-method", method])
     assert args.agg_method == method

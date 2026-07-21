@@ -112,7 +112,7 @@ class PipelineConfigPage(QWizardPage):
         #    coarser than the contextual data (so the data must be aggregated).
         self.agg_method_combo = QComboBox()
         self.agg_method_combo.addItem("Average", "average")
-        self.agg_method_combo.addItem("Midpoint", "midpoint")
+        self.agg_method_combo.addItem("Median", "median")
         self.agg_method_label = QLabel("Aggregation method:")
         exec_layout.addRow(self.agg_method_label, self.agg_method_combo)
 

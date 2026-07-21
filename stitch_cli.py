@@ -154,10 +154,10 @@ def _create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--agg-method",
         default="average",
-        choices=["average", "midpoint"],
+        choices=["average", "median"],
         help="How to reconcile contextual data when the requested resolution is "
         "coarser than the data: 'average' (mean within each period) or "
-        "'midpoint' (observation nearest the period midpoint). Ignored when the "
+        "'median' (median within each period). Ignored when the "
         "resolution matches the data (default: average).",
     )
     parser.add_argument(
