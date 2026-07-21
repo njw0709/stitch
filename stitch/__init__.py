@@ -13,8 +13,13 @@ except ImportError:
     __version__ = "0.1.0"  # Fallback for Python < 3.8
 
 from .hrs import ResidentialHistoryHRS, HRSInterviewData, HRSContextLinker
-from .daily_measure import DailyMeasureData, DailyMeasureDataDir
+from .daily_measure import (
+    DailyMeasureData,
+    DailyMeasureDataDir,
+    aggregate_contextual_to_resolution,
+)
 from .io_utils import read_data, write_data, get_file_format
+from .temporal import LinkageResolution, AggMethod, infer_temporal_resolution
 from .process import (
     compute_required_years,
     extract_unique_geoids,
@@ -32,10 +37,15 @@ __all__ = [
     # Daily measure classes
     "DailyMeasureData",
     "DailyMeasureDataDir",
+    "aggregate_contextual_to_resolution",
     # I/O utilities
     "read_data",
     "write_data",
     "get_file_format",
+    # Temporal resolution
+    "LinkageResolution",
+    "AggMethod",
+    "infer_temporal_resolution",
     # Processing functions
     "compute_required_years",
     "extract_unique_geoids",

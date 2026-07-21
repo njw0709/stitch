@@ -5,6 +5,7 @@ import pandas as pd
 import re
 
 from .io_utils import get_file_format, normalize_geoid_for_processing, read_data
+from .temporal import AggMethod, LinkageResolution
 
 # Map file prefix to column name
 FILENAME_TO_VARNAME_DICT = {
@@ -14,6 +15,71 @@ FILENAME_TO_VARNAME_DICT = {
     "ozone": "o3",
     "heat_index": "HeatIndex",
 }
+
+
+def _period_midpoint(floored: pd.Series, resolution: LinkageResolution) -> pd.Series:
+    """Midpoint timestamp of each period whose start is ``floored``."""
+    if resolution is LinkageResolution.HOURLY:
+        return floored + pd.Timedelta(minutes=30)
+    if resolution is LinkageResolution.DAILY:
+        return floored + pd.Timedelta(hours=12)
+    # Monthly: midpoint depends on the calendar length of each month.
+    month_end = floored + pd.DateOffset(months=1)
+    return floored + (month_end - floored) / 2
+
+
+def aggregate_contextual_to_resolution(
+    df: pd.DataFrame,
+    *,
+    date_col: str,
+    geoid_col: str,
+    data_cols: Union[str, List[str]],
+    resolution: Union[str, LinkageResolution],
+    method: Union[str, AggMethod] = AggMethod.AVERAGE,
+) -> pd.DataFrame:
+    """Reconcile contextual data to a (coarser-or-equal) linkage resolution.
+
+    The date column is floored to the resolution's canonical period key. When
+    multiple observations fall in the same ``(period, GEOID)`` bucket they are
+    reconciled by ``method``:
+
+    - ``average``: mean of each data column within the bucket.
+    - ``midpoint``: the single observation nearest the period midpoint
+      (e.g. noon for daily, mid-month for monthly).
+
+    The returned frame has columns ``[date_col, geoid_col, *data_cols]`` with
+    one row per ``(period, GEOID)``. When the data is already at the requested
+    resolution this is effectively a flooring pass.
+    """
+    resolution = LinkageResolution.from_str(resolution)
+    method = AggMethod.from_str(method)
+    if isinstance(data_cols, str):
+        data_cols = [data_cols]
+
+    work = df.copy()
+    floored = resolution.floor(work[date_col])
+
+    if method is AggMethod.AVERAGE:
+        work[date_col] = floored
+        grouped = (
+            work.groupby([date_col, geoid_col], observed=True)[data_cols]
+            .mean()
+            .reset_index()
+        )
+        return grouped
+
+    # Midpoint: pick the observation closest to the period midpoint.
+    mid = _period_midpoint(floored, resolution)
+    work = work.assign(
+        _period_key=floored,
+        _dist=(work[date_col] - mid).abs(),
+    )
+    work = work.sort_values("_dist")
+    picked = work.drop_duplicates(subset=["_period_key", geoid_col], keep="first")
+    picked = picked.copy()
+    picked[date_col] = picked["_period_key"]
+    out_cols = [date_col, geoid_col] + list(data_cols)
+    return picked[out_cols].reset_index(drop=True)
 
 
 class DailyMeasureData:
@@ -410,12 +476,40 @@ class DailyMeasureData:
 
 class DailyMeasureDataDir:
     """
-    Directory wrapper that lazy-loads yearly DailyMeasureData files
-    for a given measure type, validating column presence similarly to
-    DailyMeasureData itself.
+    Directory wrapper that lazy-loads contextual measure files for a given
+    measure type, validating column presence similarly to DailyMeasureData
+    itself.
+
+    Files may be saved either per year (filename contains a 4-digit year, e.g.
+    ``2010_daily_heat_index.csv``) or per month (filename contains
+    ``YYYY_MM``, e.g. ``2010_10_heat_index.csv``). Multiple month files are
+    allowed per year; they are concatenated when that year is loaded. A year
+    may not mix a year-level file with month-level files, and exact periods may
+    not be duplicated.
     """
 
+    # ``YYYY_MM`` (per-month) is matched first; ``YYYY`` (per-year) is the
+    # fallback. Month must be a valid 1-12 value to be treated as per-month.
+    PERIOD_PATTERN = re.compile(r"(\d{4})_(\d{2})")
     YEAR_PATTERN = re.compile(r"(\d{4})")
+
+    @classmethod
+    def _parse_period(cls, filename: str) -> tuple:
+        """Extract a (year, month) period from *filename*.
+
+        Returns ``(year, month)`` where ``month`` is an ``int`` in 1-12 for a
+        per-month file, or ``None`` for a per-year file. Raises ``ValueError``
+        if no 4-digit year can be found.
+        """
+        m = cls.PERIOD_PATTERN.search(filename)
+        if m:
+            month = int(m.group(2))
+            if 1 <= month <= 12:
+                return m.group(1), month
+        y = cls.YEAR_PATTERN.search(filename)
+        if not y:
+            raise ValueError(f"Could not extract year from filename: {filename}")
+        return y.group(1), None
 
     def __init__(
         self,
@@ -597,9 +691,9 @@ class DailyMeasureDataDir:
                 f"No data files found for measure type '{measure_type}' in {dir_name}"
             )
 
-        # Build year → file mapping
-        self.year_to_file: Dict[str, Path] = self._build_year_file_map()
-        self.years_available: List[str] = sorted(self.year_to_file.keys())
+        # Build year → [files] mapping (supports per-year and per-month files)
+        self.year_to_files: Dict[str, List[Path]] = self._build_year_file_map()
+        self.years_available: List[str] = sorted(self.year_to_files.keys())
 
         # Validate that each file contains the expected data_col
         self._validate_files_have_datacol()
@@ -608,16 +702,53 @@ class DailyMeasureDataDir:
         self._cache: Dict[str, DailyMeasureData] = {}
 
     # ------------------------------------------------------------------
-    def _build_year_file_map(self) -> Dict[str, Path]:
-        mapping = {}
+    def _build_year_file_map(self) -> Dict[str, List[Path]]:
+        """Group files by year, supporting per-year and per-month filenames.
+
+        A year may be represented by a single per-year file OR by one or more
+        per-month files, but not both. Duplicate exact periods (same year, or
+        same year-month) are rejected.
+        """
+        mapping: Dict[str, List[Path]] = {}
+        # Track how each year is represented and which months are seen.
+        year_kind: Dict[str, str] = {}  # "year" or "month"
+        seen_months: Dict[str, set] = {}
+
         for f in self.files:
-            m = self.YEAR_PATTERN.search(f.name)
-            if not m:
-                raise ValueError(f"Could not extract year from filename: {f.name}")
-            year = m.group(1)
-            if year in mapping:
-                raise ValueError(f"Duplicate year {year} found in directory")
-            mapping[year] = f
+            year, month = self._parse_period(f.name)
+
+            if month is None:
+                # Per-year file
+                if year in year_kind:
+                    if year_kind[year] == "year":
+                        raise ValueError(f"Duplicate year {year} found in directory")
+                    raise ValueError(
+                        f"Year {year} mixes a per-year file with per-month files "
+                        f"({f.name}); use either one per-year file or per-month "
+                        f"files for a given year, not both."
+                    )
+                year_kind[year] = "year"
+            else:
+                # Per-month file
+                if year_kind.get(year) == "year":
+                    raise ValueError(
+                        f"Year {year} mixes a per-year file with per-month files "
+                        f"({f.name}); use either one per-year file or per-month "
+                        f"files for a given year, not both."
+                    )
+                months = seen_months.setdefault(year, set())
+                if month in months:
+                    raise ValueError(
+                        f"Duplicate period {year}_{month:02d} found in directory"
+                    )
+                months.add(month)
+                year_kind[year] = "month"
+
+            mapping.setdefault(year, []).append(f)
+
+        # Keep files within each year deterministically ordered.
+        for year in mapping:
+            mapping[year] = sorted(mapping[year])
         return mapping
 
     # ------------------------------------------------------------------
@@ -627,7 +758,12 @@ class DailyMeasureDataDir:
         any renaming rules for that year. Raises informative error otherwise.
         """
         missing = []
-        for year, fpath in self.year_to_file.items():
+        files_by_year = [
+            (year, fpath)
+            for year, fpaths in self.year_to_files.items()
+            for fpath in fpaths
+        ]
+        for year, fpath in files_by_year:
             # Read just the header based on file format
             file_format = get_file_format(fpath)
 
@@ -668,34 +804,51 @@ class DailyMeasureDataDir:
     def __getitem__(self, year: Union[int, str]) -> DailyMeasureData:
         """
         Lazy load a specific year's DailyMeasureData object.
+
+        When a year is stored across multiple per-month files, they are loaded
+        individually and concatenated into a single DailyMeasureData.
         """
         year_key = str(year)
-        if year_key not in self.year_to_file:
+        if year_key not in self.year_to_files:
             raise KeyError(
                 f"Year {year_key} not found. Available: {self.years_available}"
             )
 
         if year_key not in self._cache:
-            file_path = self.year_to_file[year_key]
+            file_paths = self.year_to_files[year_key]
             rename_col = self.rename_col_dict.get(year_key, None)
 
+            names = ", ".join(fp.name for fp in file_paths)
             print(
-                f"📥 Loading {self.measure_type or self.data_col} file for year {year_key}: {file_path.name}"
+                f"📥 Loading {self.measure_type or self.data_col} file(s) for year {year_key}: {names}"
             )
 
-            self._cache[year_key] = DailyMeasureData(
-                file_path=file_path,
-                data_col=self.data_col,
-                measure_type=self.measure_type,
-                read_dtype=self.read_dtype,
-                rename_col=rename_col,
-                geoid_filter=self.geoid_filter,
-                geoid_col=self.geoid_col,
-                date_col=self.date_col,
-                geoid_n_digits=self.geoid_n_digits,
-                geoid_treatment=self.geoid_treatment,
-                geoid_numeric_type=self.geoid_numeric_type,
-            )
+            parts = [
+                DailyMeasureData(
+                    file_path=fp,
+                    data_col=self.data_col,
+                    measure_type=self.measure_type,
+                    read_dtype=self.read_dtype,
+                    rename_col=rename_col,
+                    geoid_filter=self.geoid_filter,
+                    geoid_col=self.geoid_col,
+                    date_col=self.date_col,
+                    geoid_n_digits=self.geoid_n_digits,
+                    geoid_treatment=self.geoid_treatment,
+                    geoid_numeric_type=self.geoid_numeric_type,
+                )
+                for fp in file_paths
+            ]
+
+            combined = parts[0]
+            if len(parts) > 1:
+                combined.df = pd.concat(
+                    [p.df for p in parts], axis=0, ignore_index=True
+                )
+                # Guard against overlapping (date, GEOID) pairs across months.
+                combined._check_unique_date_geoid_pairs()
+
+            self._cache[year_key] = combined
 
         return self._cache[year_key]
 

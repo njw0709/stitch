@@ -144,16 +144,35 @@ def _create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--linkage-resolution",
+        default="daily",
+        choices=["hourly", "daily", "monthly"],
+        help="Temporal resolution for linkage (default: daily). Lags are counted "
+        "in this unit (hours / days / months). Must not be finer than the "
+        "contextual data's own resolution.",
+    )
+    parser.add_argument(
+        "--agg-method",
+        default="average",
+        choices=["average", "midpoint"],
+        help="How to reconcile contextual data when the requested resolution is "
+        "coarser than the data: 'average' (mean within each period) or "
+        "'midpoint' (observation nearest the period midpoint). Ignored when the "
+        "resolution matches the data (default: average).",
+    )
+    parser.add_argument(
         "--n-lags",
         type=int,
         default=365,
-        help="Number of lags to process (default: 365)",
+        help="Number of lags to process, in the linkage-resolution unit "
+        "(default: 365).",
     )
     parser.add_argument(
         "--start-lag",
         type=int,
         default=0,
-        help="Lag day to start from, i.e. minimum days prior (default: 0).",
+        help="Lag to start from, i.e. minimum periods prior in the "
+        "linkage-resolution unit (default: 0).",
     )
     parser.add_argument(
         "--parallel", action="store_true", help="Use parallel processing"

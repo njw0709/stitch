@@ -13,6 +13,7 @@ from .io_utils import (
     read_data,
     write_data,
 )
+from .temporal import LinkageResolution
 
 
 # ---------------------------------------------------------------------
@@ -261,6 +262,7 @@ class HRSInterviewData:
         geoid_n_digits: int = 11,
         geoid_treatment: str = "code",
         geoid_numeric_type: str = "int",
+        linkage_resolution: Union[str, LinkageResolution] = LinkageResolution.DAILY,
     ):
         self.filename = Path(filename)
         self.df = read_data(self.filename)
@@ -275,12 +277,15 @@ class HRSInterviewData:
         self.geoid_n_digits = geoid_n_digits
         self.geoid_treatment = geoid_treatment
         self.geoid_numeric_type = geoid_numeric_type
+        self.linkage_resolution = LinkageResolution.from_str(linkage_resolution)
 
-        # Normalize date column to datetime
+        # Normalize the interview/reference date column to datetime. The format
+        # is inferred per value so coarse values (year-only, year-month) are
+        # anchored to their period midpoint (e.g. 2013-03 -> 2013-03-16 12:00)
+        # and numeric YYYY / YYYYMM / YYYYMMDD are handled, consistent with how
+        # residential-history move dates are parsed.
         if datecol in self.df.columns:
-            self.df[datecol] = pd.to_datetime(
-                self.df[datecol], errors="coerce", format="mixed"
-            )
+            self.df[datecol] = infer_datetime_series(self.df[datecol])
 
         # Normalize identifier type to integer (nullable) for consistent joins/lookups
         if self.hhidpn in self.df.columns:
@@ -337,27 +342,42 @@ class HRSContextLinker:
     # Lag column naming helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _lag_suffix(n: int) -> str:
-        return f"{n}day_prior"
+    def _lag_suffix(n: int, resolution=LinkageResolution.DAILY) -> str:
+        unit = LinkageResolution.from_str(resolution).lag_unit
+        return f"{n}{unit}_prior"
 
     @staticmethod
-    def _lag_date_colname(datecol: str, n: int) -> str:
-        return f"{datecol}_{HRSContextLinker._lag_suffix(n)}"
+    def _lag_date_colname(datecol: str, n: int, resolution=LinkageResolution.DAILY) -> str:
+        return f"{datecol}_{HRSContextLinker._lag_suffix(n, resolution)}"
 
     @staticmethod
-    def _lag_geoid_colname(geoid_col: str, n: int) -> str:
-        return f"{geoid_col}_{HRSContextLinker._lag_suffix(n)}"
+    def _lag_geoid_colname(geoid_col: str, n: int, resolution=LinkageResolution.DAILY) -> str:
+        return f"{geoid_col}_{HRSContextLinker._lag_suffix(n, resolution)}"
 
     @staticmethod
-    def _lag_days_from_date_col(lag_date_col: str, datecol: str) -> int:
+    def _lag_n_from_date_col(
+        lag_date_col: str, datecol: str, resolution=LinkageResolution.DAILY
+    ) -> int:
+        unit = LinkageResolution.from_str(resolution).lag_unit
         prefix = f"{datecol}_"
-        suffix = "day_prior"
+        suffix = f"{unit}_prior"
         if not lag_date_col.startswith(prefix) or not lag_date_col.endswith(suffix):
             raise ValueError(
                 f"Lag date column {lag_date_col!r} does not match expected "
-                f"pattern {datecol!r}_{{n}}day_prior"
+                f"pattern {datecol!r}_{{n}}{unit}_prior"
             )
         return int(lag_date_col[len(prefix) : -len(suffix)])
+
+    # Backward-compatible alias (daily-only).
+    @staticmethod
+    def _lag_days_from_date_col(lag_date_col: str, datecol: str) -> int:
+        return HRSContextLinker._lag_n_from_date_col(
+            lag_date_col, datecol, LinkageResolution.DAILY
+        )
+
+    @staticmethod
+    def _hrs_resolution(hrs_data: "HRSInterviewData") -> LinkageResolution:
+        return getattr(hrs_data, "linkage_resolution", LinkageResolution.DAILY)
 
     # ------------------------------------------------------------------
     # 1. n-day prior date column
@@ -368,10 +388,10 @@ class HRSContextLinker:
         Create a new column representing the date n days prior to the
         respondent's reference date column.
         """
-        colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n_day_prior)
-        hrs_data.df[colname] = hrs_data.df[hrs_data.datecol] - pd.to_timedelta(
-            n_day_prior, unit="d"
-        )
+        res = HRSContextLinker._hrs_resolution(hrs_data)
+        colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n_day_prior, res)
+        lag = hrs_data.df[hrs_data.datecol] - res.offset(n_day_prior)
+        hrs_data.df[colname] = res.floor(lag)
         return colname
 
     # ------------------------------------------------------------------
@@ -408,24 +428,24 @@ class HRSContextLinker:
         """
         # Start with copy of HRS data
         result_df = hrs_data.df.copy()
+        res = HRSContextLinker._hrs_resolution(hrs_data)
 
         # Collect all new columns to avoid fragmentation
         new_columns = {}
 
         # Create date columns for all lags
         for n in tqdm(n_days, desc="Creating date columns", unit="lag"):
-            date_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n)
-            new_columns[date_colname] = result_df[hrs_data.datecol] - pd.to_timedelta(
-                n, unit="d"
-            )
+            date_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n, res)
+            lag = result_df[hrs_data.datecol] - res.offset(n)
+            new_columns[date_colname] = res.floor(lag)
 
         # Create GEOID columns for all lags using the helper method
         if geoid_col is None:
             geoid_col = hrs_data.geoid_col
 
         for n in tqdm(n_days, desc="Creating GEOID columns", unit="lag"):
-            date_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n)
-            geoid_colname = HRSContextLinker._lag_geoid_colname(geoid_col, n)
+            date_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n, res)
+            geoid_colname = HRSContextLinker._lag_geoid_colname(geoid_col, n, res)
 
             # Use helper method to compute GEOIDs
             new_columns[geoid_colname] = HRSContextLinker._compute_geoid_for_date(
@@ -481,8 +501,9 @@ class HRSContextLinker:
         if geoid_col is None:
             geoid_col = hrs_data.geoid_col
         target_df = hrs_data.df if df is None else df
-        n = HRSContextLinker._lag_days_from_date_col(merge_date_col, hrs_data.datecol)
-        colname = HRSContextLinker._lag_geoid_colname(geoid_col, n)
+        res = HRSContextLinker._hrs_resolution(hrs_data)
+        n = HRSContextLinker._lag_n_from_date_col(merge_date_col, hrs_data.datecol, res)
+        colname = HRSContextLinker._lag_geoid_colname(geoid_col, n, res)
 
         # Compute GEOIDs using helper method
         geoids = HRSContextLinker._compute_geoid_for_date(
@@ -506,15 +527,22 @@ class HRSContextLinker:
         Merge HRS data with contextual daily data across all years in a single merge.
         This is typically faster than looping year by year.
         """
+        res = HRSContextLinker._hrs_resolution(hrs_data)
         date_col = left_on[0]
-        n = HRSContextLinker._lag_days_from_date_col(date_col, hrs_data.datecol)
-        nday_prior_str = HRSContextLinker._lag_suffix(n)
+        n = HRSContextLinker._lag_n_from_date_col(date_col, hrs_data.datecol, res)
+        nday_prior_str = HRSContextLinker._lag_suffix(n, res)
 
         # Build one contextual DataFrame from all years
         years = contextual_dir.list_years()
         contextual_df = pd.concat([contextual_dir[yr].df for yr in years], axis=0)
         first_context = contextual_dir[years[0]]
         right_on = [first_context.date_col, first_context.geoid_col]
+        # Align contextual timestamps to the linkage period key so the exact
+        # merge lines up with the (also floored) survey lag dates.
+        contextual_df = contextual_df.copy()
+        contextual_df[first_context.date_col] = res.floor(
+            contextual_df[first_context.date_col]
+        )
 
         # Check for overlapping columns
         overlap = set(hrs_data.df.columns) & set(contextual_df.columns) - set(right_on)
@@ -596,13 +624,15 @@ class HRSContextLinker:
         if geoid_col is None:
             geoid_col = hrs_data.geoid_col
 
+        res = HRSContextLinker._hrs_resolution(hrs_data)
+
         # Normalize contextual_data_col to list
         if isinstance(contextual_data_col, str):
             contextual_data_col = [contextual_data_col]
 
         # Extract pre-computed lag columns
-        n_day_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n)
-        n_day_geoid_colname = HRSContextLinker._lag_geoid_colname(geoid_col, n)
+        n_day_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n, res)
+        n_day_geoid_colname = HRSContextLinker._lag_geoid_colname(geoid_col, n, res)
 
         hrs_copy = precomputed_lag_df[
             [id_col, n_day_colname, n_day_geoid_colname]

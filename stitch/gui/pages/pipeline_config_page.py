@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from ..widgets.file_picker import DirectoryPicker
 from ..validators import load_preview_data
+from ...temporal import LinkageResolution
 
 
 SUPPORTED_EXTENSIONS = [".csv", ".dta", ".parquet", ".pq", ".feather", ".xlsx", ".xls"]
@@ -54,6 +55,10 @@ class PipelineConfigPage(QWizardPage):
         self.setSubTitle("Configure pipeline execution settings and output options.")
 
         self._raw_samples: dict[str, list] = {}
+        # Inferred contextual resolution (set on initializePage); None until known.
+        self._contextual_resolution: Optional[LinkageResolution] = None
+        # Whether the resolution selector has been seeded once (fresh vs. edit).
+        self._resolution_initialized = False
 
         layout = QVBoxLayout()
 
@@ -61,6 +66,22 @@ class PipelineConfigPage(QWizardPage):
         exec_group = QGroupBox("Temporal lag options")
         exec_layout = QFormLayout()
 
+        # 1. Linkage resolution (drives lag unit and aggregation). Entries finer
+        #    than the contextual data's inferred resolution are disabled in
+        #    initializePage(); the default is the contextual resolution itself.
+        self.resolution_combo = QComboBox()
+        for res in (
+            LinkageResolution.HOURLY,
+            LinkageResolution.DAILY,
+            LinkageResolution.MONTHLY,
+        ):
+            self.resolution_combo.addItem(res.label, res.value)
+        # Default to Daily until a contextual resolution is known.
+        self.resolution_combo.setCurrentText(LinkageResolution.DAILY.label)
+        self.resolution_combo.currentTextChanged.connect(self._on_resolution_changed)
+        exec_layout.addRow("Linkage resolution:", self.resolution_combo)
+
+        # 2. Lags (interpreted in the chosen resolution unit).
         self.start_lag_spin = QSpinBox()
         self.start_lag_spin.setMinimum(0)
         self.start_lag_spin.setMaximum(10000)
@@ -76,20 +97,31 @@ class PipelineConfigPage(QWizardPage):
         self.lag_count_label = QLabel()
         self.lag_count_label.setStyleSheet("color: gray; font-style: italic;")
 
+        self.lag_unit_label = QLabel("day prior")
+
         lags_row = QHBoxLayout()
         lags_row.addWidget(self.start_lag_spin)
         lags_row.addWidget(QLabel("~"))
         lags_row.addWidget(self.end_lag_spin)
-        lags_row.addWidget(QLabel("day prior"))
+        lags_row.addWidget(self.lag_unit_label)
         lags_row.addWidget(self.lag_count_label)
         lags_row.addStretch()
         exec_layout.addRow("Lags:", lags_row)
+
+        # 3. Aggregation method — shown only when the chosen resolution is
+        #    coarser than the contextual data (so the data must be aggregated).
+        self.agg_method_combo = QComboBox()
+        self.agg_method_combo.addItem("Average", "average")
+        self.agg_method_combo.addItem("Midpoint", "midpoint")
+        self.agg_method_label = QLabel("Aggregation method:")
+        exec_layout.addRow(self.agg_method_label, self.agg_method_combo)
 
         self.start_lag_spin.valueChanged.connect(self._update_lag_count_label)
         self.start_lag_spin.valueChanged.connect(self.completeChanged)
         self.end_lag_spin.valueChanged.connect(self._update_lag_count_label)
         self.end_lag_spin.valueChanged.connect(self.completeChanged)
         self._update_lag_count_label()
+        self._update_agg_method_visibility()
 
         # Checkboxes moved to the Output Settings group below.
         self.parallel_checkbox = QCheckBox(
@@ -287,6 +319,10 @@ class PipelineConfigPage(QWizardPage):
         # Register fields
         self.registerField("start_lag", self.start_lag_spin)
         self.registerField("end_lag", self.end_lag_spin)
+        self.registerField(
+            "linkage_resolution", self.resolution_combo, "currentText"
+        )
+        self.registerField("agg_method", self.agg_method_combo, "currentText")
         self.registerField("parallel", self.parallel_checkbox)
         self.registerField("include_lag_date", self.include_lag_date_checkbox)
         self.registerField("post_lag_average", self.post_lag_average_checkbox)
@@ -305,6 +341,73 @@ class PipelineConfigPage(QWizardPage):
     def initializePage(self):
         """Called when the page is shown. Load raw geoid samples."""
         self._load_raw_geoid_samples()
+        self._apply_contextual_resolution_constraints()
+
+    # ------------------------------------------------------------------
+    # Linkage resolution helpers
+    # ------------------------------------------------------------------
+
+    def _current_resolution(self) -> LinkageResolution:
+        data = self.resolution_combo.currentData()
+        try:
+            return LinkageResolution.from_str(
+                data or self.resolution_combo.currentText()
+            )
+        except ValueError:
+            return LinkageResolution.DAILY
+
+    def _set_resolution(self, res: LinkageResolution):
+        idx = self.resolution_combo.findData(res.value)
+        if idx >= 0:
+            self.resolution_combo.setCurrentIndex(idx)
+
+    def _apply_contextual_resolution_constraints(self):
+        """Disable resolutions finer than the contextual data and pick a default.
+
+        The contextual data resolution (inferred on the contextual page) is the
+        finest linkage resolution allowed. On first show the selector defaults
+        to that resolution (exact match, no aggregation); a resolution restored
+        from an edited job is preserved.
+        """
+        wizard = self.wizard()
+        ctx_raw = wizard.field("contextual_resolution") if wizard else None
+        try:
+            ctx_res = LinkageResolution.from_str(ctx_raw) if ctx_raw else None
+        except ValueError:
+            ctx_res = None
+        self._contextual_resolution = ctx_res
+
+        model = self.resolution_combo.model()
+        for i in range(self.resolution_combo.count()):
+            res = LinkageResolution.from_str(self.resolution_combo.itemData(i))
+            disabled = ctx_res is not None and res.is_finer_than(ctx_res)
+            item = model.item(i)
+            if item is not None:
+                item.setEnabled(not disabled)
+
+        if not self._resolution_initialized:
+            if ctx_res is not None:
+                self._set_resolution(ctx_res)
+            self._resolution_initialized = True
+        elif ctx_res is not None and self._current_resolution().is_finer_than(ctx_res):
+            # A previously-selected resolution is now too fine; snap to coarsest-safe.
+            self._set_resolution(ctx_res)
+
+        self._update_lag_count_label()
+        self._update_agg_method_visibility()
+
+    def _on_resolution_changed(self, *args):
+        self._update_lag_count_label()
+        self._update_agg_method_visibility()
+
+    def _update_agg_method_visibility(self):
+        """Show the aggregation method only when coarsening the contextual data."""
+        ctx_res = self._contextual_resolution
+        coarser = ctx_res is not None and self._current_resolution().is_coarser_than(
+            ctx_res
+        )
+        self.agg_method_label.setVisible(coarser)
+        self.agg_method_combo.setVisible(coarser)
 
     # ------------------------------------------------------------------
     # GEOID sampling
@@ -484,6 +587,21 @@ class PipelineConfigPage(QWizardPage):
         """Restore this page's state from a previously built args namespace."""
         self.start_lag_spin.setValue(int(getattr(args, "start_lag", 0) or 0))
         self.end_lag_spin.setValue(int(getattr(args, "n_lags", 366) or 366) - 1)
+
+        # Restore linkage resolution / aggregation method and mark the selector
+        # as user-seeded so initializePage does not override the restored choice.
+        res_raw = getattr(args, "linkage_resolution", "daily") or "daily"
+        try:
+            self._set_resolution(LinkageResolution.from_str(res_raw))
+        except ValueError:
+            self._set_resolution(LinkageResolution.DAILY)
+        self._resolution_initialized = True
+
+        agg_raw = (getattr(args, "agg_method", "average") or "average").lower()
+        agg_idx = self.agg_method_combo.findData(agg_raw)
+        if agg_idx >= 0:
+            self.agg_method_combo.setCurrentIndex(agg_idx)
+
         self.parallel_checkbox.setChecked(bool(getattr(args, "parallel", True)))
         self.include_lag_date_checkbox.setChecked(
             bool(getattr(args, "include_lag_date", False))
@@ -565,7 +683,9 @@ class PipelineConfigPage(QWizardPage):
             self._set_field_error(self.end_lag_spin, False)
 
     def _update_lag_count_label(self):
-        """Refresh the ``(N lags)`` helper from the start/end spinboxes."""
+        """Refresh the unit label and ``(N lags)`` helper from the spinboxes."""
+        unit = self._current_resolution().lag_unit
+        self.lag_unit_label.setText(f"{unit} prior")
         n = self.end_lag_spin.value() - self.start_lag_spin.value() + 1
         if n < 1:
             self.lag_count_label.setText("(invalid range)")

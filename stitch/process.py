@@ -29,12 +29,16 @@ from .hrs import (
     HRSInterviewData,
     ResidentialHistoryHRS,
 )
-from .daily_measure import DailyMeasureDataDir
+from .daily_measure import (
+    DailyMeasureDataDir,
+    aggregate_contextual_to_resolution,
+)
 from .io_utils import (
     apply_geoid_normalization,
     normalize_geoid_for_processing,
     write_data,
 )
+from .temporal import AggMethod, LinkageResolution, infer_temporal_resolution
 
 
 def convert_geoid_columns(
@@ -79,6 +83,54 @@ def convert_geoid_columns(
     return df
 
 
+def _hrs_resolution(hrs_data: HRSInterviewData) -> LinkageResolution:
+    return getattr(hrs_data, "linkage_resolution", LinkageResolution.DAILY)
+
+
+def _hrs_agg_method(hrs_data: HRSInterviewData) -> AggMethod:
+    return getattr(hrs_data, "agg_method", AggMethod.AVERAGE)
+
+
+def _prepare_contextual_resolution(
+    contextual_df: pd.DataFrame,
+    date_col: str,
+    geoid_col: str,
+    data_cols,
+    hrs_data: HRSInterviewData,
+) -> pd.DataFrame:
+    """Align/aggregate contextual data to the linkage resolution.
+
+    The contextual date column is floored to the requested resolution's period
+    key so it lines up with the (also floored) survey lag dates. When the
+    requested resolution is coarser than the contextual data, values are
+    aggregated up using the configured aggregation method.
+    """
+    res = _hrs_resolution(hrs_data)
+    ctx_res = infer_temporal_resolution(contextual_df[date_col])
+
+    if res.is_finer_than(ctx_res):
+        raise ValueError(
+            f"Requested linkage resolution '{res.value}' is finer than the "
+            f"contextual data resolution '{ctx_res.value}'. Choose a resolution "
+            f"no finer than the contextual data."
+        )
+
+    if res.is_coarser_than(ctx_res):
+        return aggregate_contextual_to_resolution(
+            contextual_df,
+            date_col=date_col,
+            geoid_col=geoid_col,
+            data_cols=data_cols,
+            resolution=res,
+            method=_hrs_agg_method(hrs_data),
+        )
+
+    # Same resolution: just align the period key (cheap, vectorized).
+    out = contextual_df.copy()
+    out[date_col] = res.floor(out[date_col])
+    return out
+
+
 def compute_required_years(
     hrs_data: HRSInterviewData,
     max_lag_days: int,
@@ -117,8 +169,14 @@ def compute_required_years(
     if date_col is None:
         date_col = hrs_data.datecol
 
+    # ``max_lag_days`` is expressed in the linkage resolution's unit (days for
+    # daily, months for monthly, hours for hourly); convert to a day span so we
+    # never drop a year that a lag could reach into.
+    res = _hrs_resolution(hrs_data)
+    max_lag_days_span = res.max_lag_days(max_lag_days)
+
     dates = hrs_data.df[date_col]
-    min_date = dates.min() - pd.Timedelta(days=max_lag_days)
+    min_date = dates.min() - pd.Timedelta(days=max_lag_days_span)
     max_date = dates.max()
 
     return list(range(min_date.year, max_date.year + 1))
@@ -252,6 +310,15 @@ def process_multiple_lags_batch(
     contextual_date_col = first_context.date_col
     contextual_geoid_col = first_context.geoid_col
     contextual_data_col = first_context.data_col
+
+    # Align/aggregate contextual data to the linkage resolution.
+    contextual_df = _prepare_contextual_resolution(
+        contextual_df,
+        contextual_date_col,
+        contextual_geoid_col,
+        contextual_data_col,
+        hrs_data,
+    )
 
     # Check for duplicate date and geoid pairs
     duplicate_mask = contextual_df.duplicated(
@@ -426,6 +493,15 @@ def process_multiple_lags_parallel(
     contextual_date_col = first_context.date_col
     contextual_geoid_col = first_context.geoid_col
     contextual_data_col = first_context.data_col
+
+    # Align/aggregate contextual data to the linkage resolution.
+    contextual_df = _prepare_contextual_resolution(
+        contextual_df,
+        contextual_date_col,
+        contextual_geoid_col,
+        contextual_data_col,
+        hrs_data,
+    )
 
     # Check for duplicate date and geoid pairs
     duplicate_mask = contextual_df.duplicated(
@@ -705,6 +781,15 @@ def _process_single_lag_internal(
             contextual_geoid_col_name = first_context.geoid_col
             data_col = first_context.data_col
 
+            # Align/aggregate contextual data to the linkage resolution.
+            contextual_df = _prepare_contextual_resolution(
+                contextual_df,
+                date_col,
+                contextual_geoid_col_name,
+                data_col,
+                hrs_data,
+            )
+
             # Merge
             out_df = HRSContextLinker.output_merged_columns(
                 hrs_data,
@@ -921,6 +1006,11 @@ def _merge_lag_averages(
     else:
         data_cols = list(args.data_col)
 
+    resolution = LinkageResolution.from_str(
+        getattr(args, "linkage_resolution", "daily") or "daily"
+    )
+    unit = resolution.lag_unit
+
     n_rows = len(base_df)
     ids_ref = base_df[id_col].values
 
@@ -956,7 +1046,7 @@ def _merge_lag_averages(
 
         n = int(f.stem.split("_lag_")[1])
         for col in data_cols:
-            val_col = f"{col}_{args.date_col}_{n}day_prior"
+            val_col = f"{col}_{args.date_col}_{n}{unit}_prior"
             if val_col not in lag_df.columns:
                 continue
             values = pd.to_numeric(lag_df[val_col], errors="coerce").reset_index(
@@ -979,7 +1069,7 @@ def _merge_lag_averages(
     for col in data_cols:
         if counts.get(col, 0) == 0:
             continue
-        avg_name = f"{col}_avg_{start_lag}_{max_lag}day_prior"
+        avg_name = f"{col}_avg_{start_lag}_{max_lag}{unit}_prior"
         avg_cols[avg_name] = sums[col] / counts[col]
 
     return pd.concat(
@@ -1065,6 +1155,15 @@ def run_pipeline(
     geoid_treatment = getattr(args, "geoid_treatment", "code")
     geoid_numeric_type = getattr(args, "geoid_numeric_type", "int")
 
+    # Linkage temporal resolution and (coarsening) aggregation method.
+    resolution = LinkageResolution.from_str(
+        getattr(args, "linkage_resolution", "daily") or "daily"
+    )
+    agg_method = AggMethod.from_str(
+        getattr(args, "agg_method", "average") or "average"
+    )
+    print(f"Linkage resolution: {resolution.value} (lag unit: {resolution.lag_unit})")
+
     # Load residential history (optional)
     if args.residential_hist:
         print("Loading residential history...")
@@ -1092,7 +1191,11 @@ def run_pipeline(
         geoid_n_digits=geoid_n_digits,
         geoid_treatment=geoid_treatment,
         geoid_numeric_type=geoid_numeric_type,
+        linkage_resolution=resolution,
     )
+    # Carry the aggregation method alongside the data so the (possibly
+    # out-of-process) lag workers can reconcile coarser-than-data contextual.
+    hrs_epi_data.agg_method = agg_method
 
     # Load contextual data
     print(f"Loading contextual daily data ({args.measure_type})...")
@@ -1284,11 +1387,12 @@ def run_pipeline(
 
         # Apply final GEOID normalization based on user config
         base_geoid = args.geoid_col
+        lag_suffix = f"{resolution.lag_unit}_prior"
         geoid_cols = [
             c
             for c in final_df.columns
             if c == base_geoid
-            or (c.startswith(f"{base_geoid}_") and c.endswith("day_prior"))
+            or (c.startswith(f"{base_geoid}_") and c.endswith(lag_suffix))
         ]
         geoid_treatment = getattr(args, "geoid_treatment", "code")
         geoid_n_digits = getattr(args, "geoid_n_digits", 11)

@@ -65,8 +65,8 @@ uv run python gui_app.py
 The GUI provides a step-by-step wizard for:
 1. Selecting STITCH survey data with dropdown selection for ID column, date column, and GEOID column
 2. Configuring optional residential history with dynamic dropdown population from data
-3. Selecting and validating contextual data directories with file name filtering and column selection
-4. Setting pipeline parameters (the temporal lag window, parallel processing, output options)
+3. Selecting and validating contextual data directories with file name filtering and column selection (the inferred data resolution is displayed)
+4. Setting pipeline parameters (the linkage resolution, temporal lag window, aggregation method, parallel processing, output options)
 5. Running the pipeline with real-time progress monitoring
 
 #### Queueing and running jobs sequentially
@@ -144,11 +144,13 @@ python stitch_cli.py \
 - `--geoid-col`: GEOID column name in survey data (default: GEOID2010)
 - `--contextual-geoid-col`: GEOID column name in contextual data files (default: GEOID10)
 - `--file-extension`: File extension to search for (e.g., .csv, .parquet)
-- `--n-lags`: Number of lag days to compute, i.e. the exclusive upper bound of the lag window (default: 365, so lags 0–364 days prior)
-- `--start-lag`: Lag day to start from, i.e. the minimum days prior (default: 0). Combined with `--n-lags`, the pipeline processes lags `start_lag`–`n_lags − 1` days prior
+- `--linkage-resolution`: Temporal resolution for linkage — `hourly`, `daily`, or `monthly` (default: `daily`). This sets the unit for lags (hours / days / months) and the granularity of the match. It **must not be finer than the contextual data's own resolution** (see [Linkage Resolution](#linkage-resolution))
+- `--agg-method`: How to reconcile the contextual data when the requested resolution is **coarser** than the data — `average` (mean within each period) or `midpoint` (the observation nearest the period midpoint) (default: `average`). Ignored when the resolution matches the data
+- `--n-lags`: Number of lags to compute, i.e. the exclusive upper bound of the lag window, in the linkage-resolution unit (default: 365, e.g. lags 0–364 days prior at daily resolution)
+- `--start-lag`: Lag to start from, i.e. the minimum periods prior in the linkage-resolution unit (default: 0). Combined with `--n-lags`, the pipeline processes lags `start_lag`–`n_lags − 1` (e.g. months prior at monthly resolution)
 - `--parallel`: Enable parallel processing
-- `--include-lag-date`: Include lag date and GEOID columns in output (one `{date_col}_{n}day_prior` and one `{geoid_col}_{n}day_prior` column per lag). Ignored if `--post-lag-average` is also set (averaging wins)
-- `--post-lag-average`: Average each measure across all lags into a single column per measure (e.g. `HeatIndex_avg_0_364day_prior`) instead of one column per lag. Strict handling: a participant missing a value for **any** lag in the range gets a missing (NaN) average. Incompatible with `--include-lag-date`
+- `--include-lag-date`: Include lag date and GEOID columns in output (one `{date_col}_{n}{unit}_prior` and one `{geoid_col}_{n}{unit}_prior` column per lag, where `{unit}` follows the linkage resolution: `hour` / `day` / `month`). Ignored if `--post-lag-average` is also set (averaging wins)
+- `--post-lag-average`: Average each measure across all lags into a single column per measure (e.g. `HeatIndex_avg_0_364day_prior`, or `..._month_prior` at monthly resolution) instead of one column per lag. Strict handling: a participant missing a value for **any** lag in the range gets a missing (NaN) average. Incompatible with `--include-lag-date`
 - `--save-temp-to-output`: Write the intermediate per-lag files as CSV into `<save-dir>/<output_stem>_lag_files/` and keep them after the run (default: hidden Parquet files in a private temp directory, deleted on success)
 
 ### Residential History Arguments
@@ -160,12 +162,71 @@ tract" marker is needed).
 
 - `--residential-hist`: Path to residential history file
 - `--res-hist-id-col`: ID column in residential history (default: hhidpn)
-- `--res-hist-date-col`: Move date column (default: move_date). The format is
-  inferred per value: full dates (`2010-03-15`, `March 2010`, `21sep2018`),
-  year-month (`2010-03`), or numeric `YYYY` / `YYYYMM` / `YYYYMMDD`. Values
-  coarser than daily are anchored to the midpoint of the period they span
-  (year-only → mid-year, year-month → mid-month, date-only → noon).
+- `--res-hist-date-col`: Move date column (default: move_date). Any resolution is
+  accepted (dates, year-month, month names, numeric `YYYY`/`YYYYMM`/`YYYYMMDD`);
+  see [Residential history time resolution](#residential-history-time-resolution)
 - `--res-hist-geoid-col`: GEOID column in residential history (default: GEOID)
+
+## Linkage Resolution
+
+Linkage happens at one of three ordered temporal resolutions:
+
+```
+hourly  <  daily  <  monthly      (finest → coarsest)
+```
+
+- You pick **one** linkage resolution (`--linkage-resolution`, or the
+  **Linkage resolution** dropdown in the GUI). The lag unit follows it: lags are
+  counted in **hours**, **days**, or **months**, and lag columns are suffixed
+  `{n}hour_prior` / `{n}day_prior` / `{n}month_prior`.
+- The **contextual data's own resolution is inferred** from its date column (and
+  filename hints). In the GUI it is displayed on the contextual-data page
+  (e.g. *Inferred data resolution: Daily*).
+- The requested resolution **cannot be finer than the contextual data**. For
+  example, you cannot request `hourly` linkage against daily data (the GUI
+  disables such options; the CLI raises an error).
+- When the requested resolution is **coarser** than the data, the contextual
+  data is **aggregated up** using `--agg-method`:
+  - `average`: mean of the measure within each period (per GEOID).
+  - `midpoint`: the single observation nearest the period midpoint (e.g. noon
+    for hourly→daily, mid-month for →monthly).
+- When the requested resolution **matches** the data, an exact match is used and
+  the aggregation method is ignored.
+
+Coarse **survey interview dates** are handled automatically: a year-only
+(`2013`) or year-month (`2013-06`) interview date is anchored to the midpoint of
+that period, then floored to the linkage period key. So monthly linkage against
+a survey that only records interview month/year works out of the box.
+
+### Residential history time resolution
+
+The residential history (`--res-hist-date-col`, default `move_date`) records
+*when* a participant lived at each GEOID. Move dates may be given at **any**
+resolution and are parsed with the same midpoint anchoring as survey dates
+(year → mid-year, year-month → mid-month, date → noon, full timestamp → as-is).
+Residential history is **independent of the linkage resolution** — it is never
+aggregated or coerced to match.
+
+For each lag, STITCH looks up the GEOID whose move date is the most recent one
+**at or before** the lagged timestamp (a step function over the sorted moves);
+mixed resolutions within one person's history sort and resolve correctly. If the
+lagged timestamp falls before the person's earliest recorded move, the GEOID —
+and the linked value — is `NaN`. Because a coarse move date anchors to its period
+midpoint (a `2015` move ≈ mid-2015), provide finer dates when precision matters.
+
+### Filename period tokens (per-year and per-month contextual files)
+
+Each contextual file must carry a period token in its filename:
+
+- **Per-year**: a 4-digit year, e.g. `2016_daily_heat_index.csv` or
+  `heat_2016.parquet`. One file per year.
+- **Per-month**: a `YYYY_MM` token, e.g. `2010_10_heat_index.csv`. Multiple
+  month files per year are allowed and are concatenated when that year is
+  loaded.
+
+Rules: a given year may use **either** a single per-year file **or** per-month
+files, not both; exact periods may not be duplicated (no two `2010` files, no
+two `2010_03` files). The `--measure-type` substring filter still applies.
 
 ## Package Structure
 
@@ -195,7 +256,7 @@ Wrapper for HRS survey data with date-based GEOID creation for contextual data l
 Parses residential move history and enables date-based GEOID lookup accounting for participant moves.
 
 ### `DailyMeasureDataDir`
-Directory-level wrapper that lazy-loads yearly contextual data files with validation.
+Directory-level wrapper that lazy-loads contextual data files (per-year `YYYY` or per-month `YYYY_MM`) with validation, concatenating multiple month files per year on load.
 
 ### `HRSContextLinker`
 Handles temporal/geographic alignment between survey and contextual data, including n-day prior date calculation and GEOID assignment.
@@ -244,12 +305,8 @@ python stitch_cli.py \
 ### Example 3: Post-lag Averaging (single averaged column per measure)
 
 Add `--post-lag-average` to collapse the entire lag window into one averaged
-column per measure instead of one column per lag day. Here the output contains a
-single `HeatIndex_avg_0_364day_prior` column holding each participant's mean heat
-index over the 0–364 days prior to their interview. Averaging is strict: if a
-participant is missing the value for any lag in the range, their average is
-missing (NaN). This option cannot be combined with `--include-lag-date` (it is
-ignored if both are given).
+column per measure (here `HeatIndex_avg_0_364day_prior`) instead of one column
+per lag.
 
 ```bash
 python stitch_cli.py \
@@ -270,12 +327,9 @@ python stitch_cli.py \
 
 ### Example 4: Saving the Intermediate Lag Files to the Output Directory
 
-Add `--save-temp-to-output` to keep the per-lag intermediate files as CSV so you
-can inspect them. Instead of hidden Parquet files in a private temporary
-directory (deleted on success), the lag files are written to
-`output/heat/surveyHeatLinked_lag_files/` (named `<save-dir>/<output_stem>_lag_files/`)
-and kept after the run. This can be combined with any other option, including
-`--post-lag-average`.
+Add `--save-temp-to-output` to keep the per-lag intermediate files as CSV for
+inspection, written to `<save-dir>/<output_stem>_lag_files/` instead of a hidden
+temp directory (see [Temporary Files and Resuming](#temporary-files-and-resuming)).
 
 ```bash
 python stitch_cli.py \
@@ -292,6 +346,85 @@ python stitch_cli.py \
     --n-lags 365 \
     --save-dir "output/heat" \
     --save-temp-to-output \
+    --parallel
+```
+
+### Example 5: Monthly Linkage (survey records only month/year)
+
+Use `--linkage-resolution monthly` when the survey records only the interview
+month and year, or when you want month-level lags. Lags are counted in
+**months**, so this processes lags 0–11 months prior and produces columns like
+`HeatIndex_iwdate_0month_prior` … `HeatIndex_iwdate_11month_prior`. Because the
+daily heat data is coarser-mapped to months, `--agg-method average` collapses
+each month's daily values into a single monthly mean (use `midpoint` to instead
+pick the mid-month observation). Coarse interview dates (e.g. `2016-06`) are
+anchored to the mid-month automatically.
+
+```bash
+python stitch_cli.py \
+    --survey-data "data/survey2016.dta" \
+    --context-dir "data/heat_index" \
+    --measure-type heat_index \
+    --data-col HeatIndex \
+    --id-col hhidpn \
+    --date-col iwdate \
+    --geoid-col GEOID2010 \
+    --contextual-geoid-col GEOID10 \
+    --linkage-resolution monthly \
+    --agg-method average \
+    --start-lag 0 \
+    --n-lags 12 \
+    --save-dir "output/heat_monthly" \
+    --parallel
+```
+
+### Example 6: Hourly Linkage (sub-daily contextual data)
+
+When the contextual data carries a time-of-day (e.g. hourly temperature),
+`--linkage-resolution hourly` counts lags in **hours**. This processes lags 0–23
+hours prior, producing columns like `Tmax_iwdate_0hour_prior` …
+`Tmax_iwdate_23hour_prior`. The requested resolution must not be finer than the
+data, so hourly linkage requires hourly (or finer) contextual data, and the
+survey date column should carry meaningful hour-of-day values.
+
+```bash
+python stitch_cli.py \
+    --survey-data "data/survey_hourly.dta" \
+    --context-dir "data/temperature_hourly" \
+    --measure-type tmmx \
+    --data-col Tmax \
+    --id-col hhidpn \
+    --date-col iwdatetime \
+    --geoid-col GEOID2010 \
+    --contextual-geoid-col GEOID10 \
+    --linkage-resolution hourly \
+    --start-lag 0 \
+    --n-lags 24 \
+    --save-dir "output/temp_hourly" \
+    --parallel
+```
+
+### Example 7: Monthly Contextual Files (`YYYY_MM`)
+
+Contextual data can be stored one file per month (e.g. `2016_01_heat_index.csv`,
+`2016_02_heat_index.csv`, …). No special flag is needed — the directory is read
+exactly like per-year files; all month files for a year are concatenated on load.
+Pair this with `--linkage-resolution monthly` for a natural month-to-month match.
+
+```bash
+python stitch_cli.py \
+    --survey-data "data/survey2016.dta" \
+    --context-dir "data/heat_index_monthly" \
+    --measure-type heat_index \
+    --data-col HeatIndex \
+    --id-col hhidpn \
+    --date-col iwdate \
+    --geoid-col GEOID2010 \
+    --contextual-geoid-col GEOID10 \
+    --linkage-resolution monthly \
+    --start-lag 0 \
+    --n-lags 12 \
+    --save-dir "output/heat_monthly" \
     --parallel
 ```
 
@@ -348,9 +481,13 @@ directory (as CSV)"** (GUI). This changes the behavior above:
 
 ### Contextual Data Files
 - Format: CSV, Stata, Parquet, Feather, or Excel
-- Naming: Must include 4-digit year (e.g., `heat_2016.csv`)
+- Naming: Must include a period token — either a 4-digit year for per-year files
+  (e.g., `heat_2016.csv`) or a `YYYY_MM` token for per-month files (e.g.,
+  `2010_10_heat_index.csv`). See [Linkage Resolution](#linkage-resolution) for
+  the full rules (one style per year; no duplicate periods).
 - Structure: Long format with date, GEOID, and measure columns
-  - Date column (selectable via dropdown in GUI or defaults to "Date")
+  - Date column (selectable via dropdown in GUI or defaults to "Date"). May be
+    daily, monthly (one row per month), or hourly (carrying a time-of-day).
   - GEOID column (selectable via `--contextual-geoid-col`, default: GEOID10)
 - Consistency: All files must have identical column names
 - File filtering: Use `--measure-type` to select files containing specific substrings
@@ -359,8 +496,8 @@ directory (as CSV)"** (GUI). This changes the behavior above:
 - Format: Stata (.dta), CSV, Parquet, Feather, or Excel file
 - Long format with one row per residence and three required columns:
   - Participant ID (links to the primary dataset)
-  - Move date (when the person started living at this location; format inferred
-    automatically — e.g. `2013`, `2013-06`, `March 2013`, `2013-06-15`)
+  - Move date (when the person started living at this location; any resolution,
+    inferred automatically)
   - GEOID for that residence
 - The earliest-dated row per person is treated as their residence at survey
   entry; dates earlier than a person's first recorded date resolve to NA.
@@ -368,7 +505,9 @@ directory (as CSV)"** (GUI). This changes the behavior above:
 ## Troubleshooting
 
 ### "No year information found in filenames"
-Ensure contextual data filenames contain 4-digit years (e.g., `data_2016.csv`).
+Ensure contextual data filenames contain a period token: either a 4-digit year
+for per-year files (e.g., `data_2016.csv`) or a `YYYY_MM` token for per-month
+files (e.g., `2010_10_heat_index.csv`).
 
 ### "Column mismatch between files"
 All contextual data files must have identical column names. Check for typos or naming inconsistencies.

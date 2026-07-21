@@ -51,12 +51,17 @@ def build_args_from_wizard(wizard) -> argparse.Namespace:
         save_temp_to_output=wizard.field("save_temp_to_output"),
     )
 
-    # Temporal lag window: GUI presents an inclusive [start, end] range in days
-    # prior; internally n_lags is the exclusive upper bound (max lag = n_lags-1).
+    # Temporal lag window: GUI presents an inclusive [start, end] range in the
+    # chosen resolution unit; internally n_lags is the exclusive upper bound
+    # (max lag = n_lags-1).
     start_lag = int(wizard.field("start_lag") or 0)
     end_lag = int(wizard.field("end_lag") or 0)
     args.start_lag = start_lag
     args.n_lags = end_lag + 1
+
+    # Linkage temporal resolution and coarsening aggregation method.
+    args.linkage_resolution = wizard.field("linkage_resolution") or "daily"
+    args.agg_method = wizard.field("agg_method") or "average"
 
     # Optional: file extension
     file_ext = wizard.field("file_extension")

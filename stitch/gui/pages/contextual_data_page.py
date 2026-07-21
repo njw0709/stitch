@@ -27,6 +27,7 @@ from ..validators import (
     check_column_consistency,
     load_preview_data,
 )
+from ...temporal import LinkageResolution, infer_temporal_resolution
 
 
 class ContextualDataPage(QWizardPage):
@@ -96,7 +97,7 @@ class ContextualDataPage(QWizardPage):
         filter_row = QHBoxLayout()
         filter_row.addWidget(self.measure_type_edit, 1)
         filter_row.addWidget(self.load_preview_btn, 0)
-        dir_layout.addRow("Common file name head:", filter_row)
+        dir_layout.addRow("Common file name:", filter_row)
 
         dir_group.setLayout(dir_layout)
         layout.addWidget(dir_group)
@@ -114,8 +115,19 @@ class ContextualDataPage(QWizardPage):
         self.preview_table.setMinimumHeight(150)
         preview_layout.addWidget(self.preview_table)
 
+        # Inferred temporal resolution of the contextual data, shown after a
+        # successful preview load. Drives the allowed linkage resolutions on the
+        # pipeline config page.
+        self.resolution_label = QLabel("")
+        self.resolution_label.setStyleSheet("font-weight: bold;")
+        preview_layout.addWidget(self.resolution_label)
+
         preview_group.setLayout(preview_layout)
         layout.addWidget(preview_group)
+
+        # Hidden field carrying the inferred resolution to later pages.
+        self.resolution_field = QLineEdit("")
+        self.resolution_field.setVisible(False)
 
         # Column selection group
         columns_group = QGroupBox("Column Selection")
@@ -196,6 +208,9 @@ class ContextualDataPage(QWizardPage):
         self.date_col_combo.currentTextChanged.connect(
             lambda: self._set_field_error(self.date_col_combo, False)
         )
+        self.date_col_combo.currentTextChanged.connect(
+            self._update_inferred_resolution
+        )
         columns_layout.addRow("Date Column:", self.date_col_combo)
 
         columns_group.setLayout(columns_layout)
@@ -212,6 +227,7 @@ class ContextualDataPage(QWizardPage):
         self.registerField("contextual_geoid_col", self.geoid_col_combo, "currentText")
         self.registerField("context_date_col", self.date_col_combo, "currentText")
         self.registerField("file_extension", self.file_ext_combo, "currentText")
+        self.registerField("contextual_resolution", self.resolution_field)
 
     def _on_directory_selected(self, dir_path: str):
         """Handle directory selection."""
@@ -300,6 +316,8 @@ class ContextualDataPage(QWizardPage):
         self.geoid_col_combo.clear()
         self.date_col_combo.clear()
         self.file_paths = []
+        self.resolution_label.setText("")
+        self.resolution_field.setText("")
 
     def _on_add_data_column(self):
         """Add selected column to the data columns list."""
@@ -364,7 +382,34 @@ class ContextualDataPage(QWizardPage):
         self._set_default_if_exists(self.geoid_col_combo, "GEOID10")
         self._set_default_if_exists(self.date_col_combo, "Date")
 
+        self._update_inferred_resolution()
+
         self.completeChanged.emit()
+
+    def _update_inferred_resolution(self):
+        """Infer and display the contextual data's temporal resolution.
+
+        A larger row sample than the 5-row table preview is read so that
+        sub-daily (hourly) data can be distinguished from daily/monthly.
+        """
+        date_col = self.date_col_combo.currentText()
+        if not self.file_paths or not date_col:
+            self.resolution_label.setText("")
+            self.resolution_field.setText("")
+            return
+
+        sample_df, _ = load_preview_data(str(self.file_paths[0]), n_rows=5000)
+        if sample_df is None or date_col not in sample_df.columns:
+            self.resolution_label.setText("")
+            self.resolution_field.setText("")
+            return
+
+        filenames = [p.name for p in self.file_paths]
+        resolution = infer_temporal_resolution(sample_df[date_col], filenames)
+        self.resolution_field.setText(resolution.value)
+        self.resolution_label.setText(
+            f"Inferred data resolution: {resolution.label}"
+        )
 
     def _set_default_if_exists(self, combo: QComboBox, default_value: str):
         """Set combo box to default value if it exists in the list."""
@@ -440,7 +485,7 @@ class ContextualDataPage(QWizardPage):
         measure_ok = bool(self.measure_type_edit.text().strip())
         self._set_field_error(self.measure_type_edit, not measure_ok)
         if not measure_ok:
-            problems.append("a common file name head")
+            problems.append("a common file name")
 
         # Column selections (populated only after a successful preview load)
         data_col_ok = self.data_col_list.count() > 0
