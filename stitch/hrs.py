@@ -445,13 +445,29 @@ class HRSContextLinker:
         if geoid_col is None:
             geoid_col = hrs_data.geoid_col
 
+        # Without residential history the GEOID does not depend on the lag date,
+        # so every lag would normalize the same static column to the same result.
+        # Compute it once instead of once per lag.
+        static_geoids = None
+        if not hrs_data.move:
+            static_geoids = normalize_geoid_for_processing(
+                hrs_data.df[geoid_col],
+                treatment=hrs_data.geoid_treatment,
+                n_digits=hrs_data.geoid_n_digits,
+                numeric_type=hrs_data.geoid_numeric_type,
+            )
+
         for n in tqdm(n_days, desc="Creating GEOID columns", unit="lag"):
             date_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n, res)
             geoid_colname = HRSContextLinker._lag_geoid_colname(geoid_col, n, res)
 
             # Use helper method to compute GEOIDs
-            new_columns[geoid_colname] = HRSContextLinker._compute_geoid_for_date(
-                hrs_data, new_columns[date_colname], geoid_col
+            new_columns[geoid_colname] = (
+                static_geoids
+                if static_geoids is not None
+                else HRSContextLinker._compute_geoid_for_date(
+                    hrs_data, new_columns[date_colname], geoid_col
+                )
             )
 
         # Concatenate all new columns at once to avoid fragmentation
