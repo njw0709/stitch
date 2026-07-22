@@ -14,6 +14,7 @@ conftest.py) and pytest-qt's ``qtbot``/``qapp`` fixtures.
 
 import argparse
 
+import pandas as pd
 import pytest
 
 # Skip the whole module if the GUI stack is unavailable.
@@ -683,6 +684,151 @@ def test_run_pipeline_honors_cancellation(
         run_pipeline(args, should_cancel=lambda: True)
 
     assert not (save_dir / "cancelled.dta").exists()
+
+
+def test_run_pipeline_parallel_produces_output(
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+    monkeypatch,
+):
+    """
+    run_pipeline completes with parallel=True and writes the linked output.
+
+    This is the GUI's *default* configuration -- the wizard's parallel checkbox
+    ships checked -- so it is the path most users actually run. The dispatch is
+    asserted explicitly so the test cannot pass by quietly taking the batch path.
+    """
+    import stitch.process as sp
+    from stitch.process import run_pipeline
+
+    calls = []
+    real_parallel = sp.process_multiple_lags_parallel
+
+    def spy(*a, **kw):
+        calls.append(kw.get("n_days"))
+        return real_parallel(*a, **kw)
+
+    monkeypatch.setattr(sp, "process_multiple_lags_parallel", spy)
+
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    args = _make_job_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+        output_name="parallel_out.dta",
+        n_lags=3,
+        parallel=True,
+    )
+
+    run_pipeline(args)
+
+    assert calls, "run_pipeline did not dispatch to the parallel path"
+
+    out = save_dir / "parallel_out.dta"
+    assert out.exists(), "parallel run produced no output file"
+
+    df = pd.read_stata(out)
+    assert len(df) > 0
+    assert "hhidpn" in df.columns
+    # One measure column per lag, suffixed with the lag date column name.
+    lag_cols = [c for c in df.columns if c.startswith("index_")]
+    assert len(lag_cols) == 3, f"expected 3 lag columns, got {lag_cols}"
+
+
+def test_run_pipeline_parallel_honors_cancellation(
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+):
+    """
+    Cancelling a parallel run raises PipelineCancelled and writes no output.
+
+    The parallel path unwinds differently from the batch path -- it shuts the
+    executor down with cancel_futures inside the as_completed loop rather than
+    checking a flag between lags -- so it needs its own coverage.
+    """
+    from stitch.process import run_pipeline, PipelineCancelled
+
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    args = _make_job_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+        output_name="parallel_cancelled.dta",
+        n_lags=2,
+        parallel=True,
+    )
+
+    with pytest.raises(PipelineCancelled):
+        run_pipeline(args, should_cancel=lambda: True)
+
+    assert not (save_dir / "parallel_cancelled.dta").exists()
+
+
+def test_parallel_run_completes_inside_gui_thread(
+    qtbot,
+    fake_residential_history_file,
+    survey_data_2016_2020,
+    heat_index_dir,
+    tmp_path,
+):
+    """
+    A real parallel job runs to completion through the GUI's QThread runner.
+
+    The worker pool is spawned from inside a QThread while stdout/stderr are
+    redirected to a signal-emitting stream. That combination -- not run_pipeline
+    on its own -- is what would deadlock or crash the app, so it is exercised
+    here with the real pipeline rather than a stub.
+    """
+    save_dir = tmp_path / "save"
+    save_dir.mkdir()
+
+    args = _make_job_args(
+        survey_data=survey_data_2016_2020,
+        context_dir=heat_index_dir,
+        save_dir=save_dir,
+        residential_hist=fake_residential_history_file,
+        output_name="gui_parallel.dta",
+        n_lags=2,
+        parallel=True,
+    )
+
+    window = StitchMainWindow()
+    qtbot.addWidget(window)
+    window.jobs.append(Job(name="Parallel job", args=args, status=STATUS_PENDING))
+    window._add_job_item(window.jobs[-1])
+    window._refresh_buttons()
+
+    run_items = [(0, window.jobs[0])]
+    dialog = ExecutionDialog(run_items, window)
+    dialog.job_status_changed.connect(window._on_job_status_changed)
+    qtbot.addWidget(dialog)
+    dialog.start()
+
+    qtbot.waitUntil(dialog.is_finished, timeout=120_000)
+
+    assert window.jobs[0].status == STATUS_DONE, (
+        f"parallel job did not complete: status={window.jobs[0].status}"
+    )
+
+    out = save_dir / "gui_parallel.dta"
+    assert out.exists()
+
+    # Assert the lag columns are actually present. run_pipeline logs per-lag
+    # worker errors and carries on, so a run where every worker died still
+    # reports success and writes a file -- existence alone proves nothing.
+    df = pd.read_stata(out)
+    lag_cols = [c for c in df.columns if c.startswith("index_")]
+    assert len(lag_cols) == 2, f"expected 2 lag columns, got {lag_cols}"
 
 
 def test_stop_cancels_current_job_and_leaves_rest_pending(qtbot, tmp_path, monkeypatch):
