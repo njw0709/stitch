@@ -330,6 +330,49 @@ class TestKwargsPassthrough:
         assert pd.isna(df_read.loc[2, "A"])
         assert pd.isna(df_read.loc[3, "B"])
 
+    @pytest.mark.parametrize(
+        "ext", [".csv", ".parquet", ".feather", ".dta", ".xlsx"]
+    )
+    def test_dtype_applied_for_every_format(self, sample_dataframe, temp_dir, ext):
+        """
+        A requested dtype must be honoured regardless of file format.
+
+        Only read_csv/read_excel accept ``dtype=``. read_parquet forwards
+        unknown kwargs to pyarrow, which raised TypeError; read_feather and
+        read_stata dropped it silently, leaving the column at its stored dtype.
+        Both are now handled by casting after the read.
+        """
+        path = temp_dir / f"test_dtype{ext}"
+        write_data(sample_dataframe, path, index=False)
+
+        df_read = read_data(path, dtype={"Value": "float32"})
+
+        assert df_read["Value"].dtype == "float32"
+
+    @pytest.mark.parametrize("ext", [".csv", ".parquet", ".feather", ".dta", ".xlsx"])
+    def test_dtype_none_is_accepted(self, sample_dataframe, temp_dir, ext):
+        """An explicit ``dtype=None`` must be a no-op, not an error."""
+        path = temp_dir / f"test_dtype_none{ext}"
+        write_data(sample_dataframe, path, index=False)
+
+        df_read = read_data(path, dtype=None)
+
+        assert len(df_read) == len(sample_dataframe)
+
+    def test_dtype_ignores_columns_absent_from_selection(
+        self, sample_dataframe, temp_dir
+    ):
+        """A dtype map may name columns that usecols did not select."""
+        path = temp_dir / "test_dtype_subset.parquet"
+        write_data(sample_dataframe, path, index=False)
+
+        df_read = read_data(
+            path, usecols=["Date", "Value"], dtype={"Value": "float32", "Count": "int32"}
+        )
+
+        assert list(df_read.columns) == ["Date", "Value"]
+        assert df_read["Value"].dtype == "float32"
+
 
 class TestSpecialCases:
     """Tests for special cases and edge conditions."""

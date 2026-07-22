@@ -270,6 +270,26 @@ def _filter_kwargs(func: callable, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         return kwargs
 
 
+# Readers that accept a ``dtype=`` kwarg directly. For every other format the
+# cast is applied after reading, via ``_apply_dtype``.
+_DTYPE_AWARE_FORMATS = {"csv", "xlsx", "xls"}
+
+
+def _apply_dtype(df: pd.DataFrame, dtype: Any) -> pd.DataFrame:
+    """
+    Cast *df* after reading, for formats whose reader has no ``dtype=`` option.
+
+    Columns named in a dict *dtype* that are absent from *df* are ignored, so a
+    caller may pass a dtype map covering columns it did not end up selecting.
+    """
+    if dtype is None:
+        return df
+    if isinstance(dtype, dict):
+        present = {c: t for c, t in dtype.items() if c in df.columns}
+        return df.astype(present) if present else df
+    return df.astype(dtype)
+
+
 # Helper: sanitize DataFrame for CSV/Excel/Stata exports
 def _sanitize_for_tabular(input_df: pd.DataFrame, mode: str = "string") -> pd.DataFrame:
     """
@@ -396,7 +416,9 @@ def read_data(
         Common examples:
         - usecols: List of columns to read (automatically mapped to 'columns' for
           Stata, Parquet, and Feather formats)
-        - dtype: Dictionary of column dtypes
+        - dtype: Dictionary of column dtypes. Applied by the reader itself for
+          CSV and Excel; for Stata, Parquet, and Feather (whose readers have no
+          dtype option) the cast is applied after reading.
         - parse_dates: List of columns to parse as dates
         - chunksize: For CSV, return an iterator (not supported for other formats)
 
@@ -433,6 +455,13 @@ def read_data(
     # Get file extension (lowercase, without dot)
     ext = file_path.suffix.lower().lstrip(".")
 
+    # pd.read_parquet forwards **kwargs to the engine, so an unsupported
+    # ``dtype`` reaches pyarrow's read_table and raises TypeError;
+    # read_feather/read_stata drop it silently, which would make a requested
+    # downcast (e.g. float32) quietly ineffective. Apply the cast ourselves for
+    # those formats instead of handing ``dtype`` to the reader.
+    post_cast = kwargs.pop("dtype", None) if ext not in _DTYPE_AWARE_FORMATS else None
+
     # Map extension to pandas read function
     if ext == "csv":
         filtered_kwargs = _filter_kwargs(pd.read_csv, kwargs)
@@ -443,21 +472,21 @@ def read_data(
         if "usecols" in mapped_kwargs and "columns" not in mapped_kwargs:
             mapped_kwargs["columns"] = mapped_kwargs.pop("usecols")
         filtered_kwargs = _filter_kwargs(pd.read_stata, mapped_kwargs)
-        return pd.read_stata(file_path, **filtered_kwargs)
+        return _apply_dtype(pd.read_stata(file_path, **filtered_kwargs), post_cast)
     elif ext in ("parquet", "pq"):
         # Parquet uses 'columns' instead of 'usecols'
         mapped_kwargs = kwargs.copy()
         if "usecols" in mapped_kwargs and "columns" not in mapped_kwargs:
             mapped_kwargs["columns"] = mapped_kwargs.pop("usecols")
         filtered_kwargs = _filter_kwargs(pd.read_parquet, mapped_kwargs)
-        return pd.read_parquet(file_path, **filtered_kwargs)
+        return _apply_dtype(pd.read_parquet(file_path, **filtered_kwargs), post_cast)
     elif ext == "feather":
         # Feather uses 'columns' instead of 'usecols'
         mapped_kwargs = kwargs.copy()
         if "usecols" in mapped_kwargs and "columns" not in mapped_kwargs:
             mapped_kwargs["columns"] = mapped_kwargs.pop("usecols")
         filtered_kwargs = _filter_kwargs(pd.read_feather, mapped_kwargs)
-        return pd.read_feather(file_path, **filtered_kwargs)
+        return _apply_dtype(pd.read_feather(file_path, **filtered_kwargs), post_cast)
     elif ext in ("xlsx", "xls"):
         filtered_kwargs = _filter_kwargs(pd.read_excel, kwargs)
         return pd.read_excel(file_path, **filtered_kwargs)
