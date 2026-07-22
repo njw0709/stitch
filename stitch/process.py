@@ -224,6 +224,50 @@ def extract_unique_geoids(
     return all_geoids
 
 
+def candidate_geoids(
+    hrs_data: HRSInterviewData,
+    geoid_col: Optional[str] = None,
+) -> set:
+    """
+    GEOIDs that could be referenced by any lag, without building the lag columns.
+
+    :func:`extract_unique_geoids` needs a frame that already has every lag's
+    GEOID column, which is exactly the expensive step the parallel path wants to
+    push into its workers. This derives the same filter directly from the source
+    data instead:
+
+    * with residential history, every residence a participant has ever occupied
+      (a superset of those an actual lag date lands on);
+    * without it, the distinct values of the static GEOID column (exact).
+
+    Being a superset only means some contextual rows are loaded and never
+    matched, which costs memory but cannot change linkage results.
+    """
+    if geoid_col is None:
+        geoid_col = hrs_data.geoid_col
+
+    if hrs_data.move:
+        if hrs_data.residential_hist is None:
+            raise ValueError(
+                "hrs_data.move is True but no residential history was provided; "
+                "pass residential_hist= or set move=False to use a static GEOID column."
+            )
+        return {
+            g
+            for _, move_geoids in hrs_data.residential_hist._move_info.values()
+            for g in move_geoids
+            if g is not None and not pd.isna(g)
+        }
+
+    normalized = normalize_geoid_for_processing(
+        hrs_data.df[geoid_col],
+        treatment=hrs_data.geoid_treatment,
+        n_digits=hrs_data.geoid_n_digits,
+        numeric_type=hrs_data.geoid_numeric_type,
+    )
+    return set(normalized.dropna().unique())
+
+
 def process_multiple_lags_batch(
     hrs_data: HRSInterviewData,
     contextual_dir: DailyMeasureDataDir,
@@ -466,17 +510,12 @@ def process_multiple_lags_parallel(
 
     print(f"\n🚀 Starting parallel processing for {len(n_days)} lags...")
 
-    # Step 1: Pre-compute all lag columns
-    print(
-        f"📋 Pre-computing date/GEOID columns for lags: {min(n_days)} to {max(n_days)}"
-    )
-    hrs_with_lags = HRSContextLinker.prepare_lag_columns_batch(
-        hrs_data, n_days, geoid_col
-    )
-
-    # Step 2: Extract unique GEOIDs
-    unique_geoids = extract_unique_geoids(hrs_with_lags, geoid_col)
-    print(f"🔍 Extracted {len(unique_geoids)} unique GEOIDs from all lag columns")
+    # Unlike the batch path, the per-lag date/GEOID columns are NOT built here.
+    # Each worker builds only the lag it is assigned, which keeps that work off
+    # the serial critical path and avoids shipping an all-lags frame (two columns
+    # per lag) to every worker just so each can read one lag's worth of it.
+    unique_geoids = candidate_geoids(hrs_data, geoid_col)
+    print(f"🔍 {len(unique_geoids)} candidate GEOIDs for contextual filtering")
 
     # Step 3: Compute required years and load filtered contextual data
     max_lag = max(n_days)
@@ -540,7 +579,7 @@ def process_multiple_lags_parallel(
             available_gb = mem.available / (1024**3)
 
             # Calculate shared data size
-            hrs_size_mb = hrs_with_lags.memory_usage(deep=True).sum() / (1024 * 1024)
+            hrs_size_mb = hrs_data.df.memory_usage(deep=True).sum() / (1024 * 1024)
             ctx_size_mb = contextual_df.memory_usage(deep=True).sum() / (1024 * 1024)
             shared_size_gb = (hrs_size_mb + ctx_size_mb) / 1024
 
@@ -596,7 +635,7 @@ def process_multiple_lags_parallel(
         mp_context=mp_context,
         initializer=_init_worker,
         initargs=(
-            hrs_data, hrs_with_lags, contextual_lookup, contextual_data_col,
+            hrs_data, contextual_lookup, contextual_data_col,
         ),
     ) as executor:
         futures = {
@@ -643,11 +682,14 @@ def process_multiple_lags_parallel(
 _worker_shared: dict = {}
 
 
-def _init_worker(hrs_data, precomputed_lag_df, contextual_lookup,
-                 contextual_data_col):
-    """Store shared read-only data in each worker process's global namespace."""
+def _init_worker(hrs_data, contextual_lookup, contextual_data_col):
+    """Store shared read-only data in each worker process's global namespace.
+
+    Deliberately does not carry a pre-computed all-lags frame: that frame holds
+    two columns per lag while each task consumes exactly one lag's worth, so
+    shipping it would dominate the per-worker transfer.
+    """
     _worker_shared['hrs_data'] = hrs_data
-    _worker_shared['precomputed_lag_df'] = precomputed_lag_df
     _worker_shared['contextual_lookup'] = contextual_lookup
     _worker_shared['contextual_data_col'] = contextual_data_col
 
@@ -664,7 +706,7 @@ def _process_single_lag_worker(n, id_col, temp_dir, prefix,
         include_lag_date=include_lag_date,
         file_format=file_format,
         geoid_col=geoid_col,
-        precomputed_lag_df=_worker_shared['precomputed_lag_df'],
+        precomputed_lag_df=None,  # built in-worker for this lag only
         contextual_lookup=_worker_shared['contextual_lookup'],
         contextual_data_col=_worker_shared['contextual_data_col'],
     )
@@ -728,12 +770,21 @@ def _process_single_lag_internal(
         (e.g., if all geoid values were NA for this lag).
     """
     try:
-        # If pre-computed data is provided, use it directly
-        if precomputed_lag_df is not None and contextual_lookup is not None:
+        # A shared contextual lookup is all that is strictly needed. The lag
+        # columns are used when handed down, and otherwise built here for this
+        # lag alone -- which is how the parallel path keeps that work in the
+        # worker instead of on the parent's serial critical path.
+        if contextual_lookup is not None:
             if contextual_data_col is None:
                 raise ValueError(
-                    "When using precomputed_lag_df with contextual_lookup, "
-                    "contextual_data_col must be provided"
+                    "When using contextual_lookup, contextual_data_col must be provided"
+                )
+
+            if precomputed_lag_df is None:
+                if geoid_col is None:
+                    geoid_col = hrs_data.geoid_col
+                precomputed_lag_df = HRSContextLinker.prepare_lag_columns_batch(
+                    hrs_data, [n], geoid_col
                 )
 
             out_df = HRSContextLinker.output_merged_columns(

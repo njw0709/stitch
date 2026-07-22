@@ -435,8 +435,14 @@ class HRSContextLinker:
         # Collect all new columns to avoid fragmentation
         new_columns = {}
 
+        # A single-lag call is the per-worker parallel path; a progress bar for
+        # one item is pure noise there, and writing it per task is not free.
+        hide_progress = len(n_days) == 1
+
         # Create date columns for all lags
-        for n in tqdm(n_days, desc="Creating date columns", unit="lag"):
+        for n in tqdm(
+            n_days, desc="Creating date columns", unit="lag", disable=hide_progress
+        ):
             date_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n, res)
             lag = result_df[hrs_data.datecol] - res.offset(n)
             new_columns[date_colname] = res.floor(lag)
@@ -457,7 +463,9 @@ class HRSContextLinker:
                 numeric_type=hrs_data.geoid_numeric_type,
             )
 
-        for n in tqdm(n_days, desc="Creating GEOID columns", unit="lag"):
+        for n in tqdm(
+            n_days, desc="Creating GEOID columns", unit="lag", disable=hide_progress
+        ):
             date_colname = HRSContextLinker._lag_date_colname(hrs_data.datecol, n, res)
             geoid_colname = HRSContextLinker._lag_geoid_colname(geoid_col, n, res)
 
