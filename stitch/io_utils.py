@@ -99,17 +99,47 @@ def normalize_geoid_for_processing(
       sources share the same plain-string representation.
     """
     if treatment == "code" and n_digits > 0:
-        digits_only = series.astype(str).str.replace(r"\D", "", regex=True)
-        digits_only = digits_only.replace({"nan": "", "None": "", "<NA>": ""})
-        if (digits_only.str.len() > n_digits).any():
-            warnings.warn(
-                f"Some GEOID values had more than {n_digits} digits after stripping "
-                "non-digits and were truncated (e.g. float representation artifacts).",
-                GeoidTruncationWarning,
-                stacklevel=2,
-            )
+        _warn_on_truncation(series, n_digits)
     return series.apply(
         lambda v: _format_geoid(_clean_geoid(v), treatment, n_digits, numeric_type)
+    )
+
+
+def _warn_on_truncation(series: pd.Series, n_digits: int) -> None:
+    """
+    Warn only about values :func:`_format_geoid` will actually shorten.
+
+    Detection has to mirror :func:`_clean_geoid`, which casts numerics through
+    ``int()`` before stringifying. Comparing ``str(value)`` directly would count
+    a float's trailing ``".0"`` as an extra digit and warn about every float
+    GEOID column, none of which is truncated in practice.
+    """
+    if pd.api.types.is_numeric_dtype(series):
+        try:
+            as_text = series.astype("Int64").astype(str)
+        except (TypeError, ValueError, OverflowError):
+            # Values int() cannot represent (inf, NaN-like objects); fall back
+            # to the plain string form rather than skipping the check entirely.
+            as_text = series.astype(str)
+    else:
+        as_text = series.astype(str)
+
+    digits_only = as_text.str.replace(r"\D", "", regex=True)
+    too_long = digits_only[digits_only.str.len() > n_digits]
+    if too_long.empty:
+        return
+
+    examples = ", ".join(
+        f"{value} -> {value[:n_digits]}" for value in too_long.drop_duplicates().head(3)
+    )
+    warnings.warn(
+        f"{len(too_long):,} GEOID value(s) ({too_long.nunique():,} distinct) had "
+        f"more than {n_digits} digits and were truncated to the first {n_digits} "
+        f"(e.g. {examples}). Census block groups (12 digits) and blocks (15) "
+        f"truncate to their {n_digits}-digit tract, which is usually intended; "
+        f"other lengths may indicate malformed identifiers.",
+        GeoidTruncationWarning,
+        stacklevel=3,
     )
 
 

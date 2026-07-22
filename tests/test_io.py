@@ -12,11 +12,18 @@ Tests cover:
 
 from __future__ import annotations
 import tempfile
+import warnings
 from pathlib import Path
 import pytest
 import pandas as pd
 import numpy as np
-from stitch.io_utils import read_data, write_data, get_file_format
+from stitch.io_utils import (
+    GeoidTruncationWarning,
+    get_file_format,
+    normalize_geoid_for_processing,
+    read_data,
+    write_data,
+)
 
 
 @pytest.fixture
@@ -372,6 +379,73 @@ class TestKwargsPassthrough:
 
         assert list(df_read.columns) == ["Date", "Value"]
         assert df_read["Value"].dtype == "float32"
+
+
+class TestGeoidTruncationWarning:
+    """The truncation warning must fire when, and only when, digits are dropped."""
+
+    @pytest.mark.parametrize(
+        "series",
+        [
+            pd.Series([12345678901.0, 6001020100.0]),  # float column
+            pd.Series([12345678901.0, None]),  # float column with a gap
+            pd.Series([12345678901], dtype="int64"),  # integer column
+            pd.Series(["12345678901"]),  # already 11 digits
+            pd.Series(["06001020100"]),  # leading zero preserved
+        ],
+        ids=["float", "float_with_na", "int64", "str_11", "str_leading_zero"],
+    )
+    def test_no_warning_when_nothing_is_truncated(self, series, recwarn):
+        """
+        Numeric columns previously warned on every value.
+
+        Detection stringified the raw value, so a float's trailing ".0" counted
+        as a twelfth digit -- while the conversion path casts through int() and
+        drops it. The warning named "float representation artifacts" as its
+        cause, which was exactly the case it handled correctly.
+        """
+        out = normalize_geoid_for_processing(series, "code", 11, "int")
+
+        assert not [
+            w for w in recwarn if w.category is GeoidTruncationWarning
+        ], "warned although no value was truncated"
+        assert all(v == "" or len(v) == 11 for v in out)
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("060010201001", "06001020100"),  # block group -> tract
+            ("060010201001234", "06001020100"),  # block -> tract
+        ],
+    )
+    def test_warns_and_truncates_longer_identifiers(self, value, expected):
+        with pytest.warns(GeoidTruncationWarning) as record:
+            out = normalize_geoid_for_processing(pd.Series([value]), "code", 11, "int")
+
+        assert list(out) == [expected]
+        message = str(record[0].message)
+        assert "1 GEOID value(s)" in message
+        assert f"{value} -> {expected}" in message, f"no before/after in: {message}"
+
+    def test_warning_reports_counts_and_examples(self):
+        """The message must say how much was affected, not just that it happened."""
+        series = pd.Series(["060010201001", "060010201001", "060010201002"])
+
+        with pytest.warns(GeoidTruncationWarning) as record:
+            normalize_geoid_for_processing(series, "code", 11, "int")
+
+        message = str(record[0].message)
+        assert "3 GEOID value(s)" in message
+        assert "2 distinct" in message
+
+    def test_no_warning_when_padding_is_disabled(self):
+        """With n_digits <= 0 nothing is truncated, so nothing should warn."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", GeoidTruncationWarning)
+            out = normalize_geoid_for_processing(
+                pd.Series(["060010201001234"]), "code", 0, "int"
+            )
+        assert list(out) == ["060010201001234"]
 
 
 class TestSpecialCases:
