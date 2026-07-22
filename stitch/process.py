@@ -340,6 +340,15 @@ def process_multiple_lags_batch(
         )
         print(f"  Removed duplicates. New shape: {contextual_df.shape}")
 
+    # Build the (date, geoid)-indexed contextual lookup once so every lag reuses
+    # the same hash instead of re-hashing the contextual table per merge.
+    contextual_lookup = HRSContextLinker.build_contextual_lookup(
+        contextual_df,
+        contextual_date_col,
+        contextual_geoid_col,
+        contextual_data_col,
+    )
+
     # Step 4: Process each lag using pre-computed data
     temp_files = []
     for n in tqdm(n_days, desc="Processing lags", unit="lag"):
@@ -351,9 +360,7 @@ def process_multiple_lags_batch(
             n=n,
             id_col=id_col,
             precomputed_lag_df=hrs_with_lags,
-            preloaded_contextual_df=contextual_df,
-            contextual_date_col=contextual_date_col,
-            contextual_geoid_col=contextual_geoid_col,
+            contextual_lookup=contextual_lookup,
             contextual_data_col=contextual_data_col,
             include_lag_date=include_lag_date,
             geoid_col=geoid_col,
@@ -568,6 +575,16 @@ def process_multiple_lags_parallel(
             print("   Falling back to default max_workers")
             max_workers = None
 
+    # Build the (date, geoid)-indexed contextual lookup once in the parent so it
+    # is serialized to each worker already-hashed; workers then resolve every lag
+    # with a cheap reindex instead of re-hashing the contextual table per merge.
+    contextual_lookup = HRSContextLinker.build_contextual_lookup(
+        contextual_df,
+        contextual_date_col,
+        contextual_geoid_col,
+        contextual_data_col,
+    )
+
     # Step 4: Process lags in parallel using separate processes
     print(f"⚡ Processing {len(n_days)} lags in parallel...")
     temp_files = []
@@ -579,8 +596,7 @@ def process_multiple_lags_parallel(
         mp_context=mp_context,
         initializer=_init_worker,
         initargs=(
-            hrs_data, hrs_with_lags, contextual_df,
-            contextual_date_col, contextual_geoid_col, contextual_data_col,
+            hrs_data, hrs_with_lags, contextual_lookup, contextual_data_col,
         ),
     ) as executor:
         futures = {
@@ -627,14 +643,12 @@ def process_multiple_lags_parallel(
 _worker_shared: dict = {}
 
 
-def _init_worker(hrs_data, precomputed_lag_df, preloaded_contextual_df,
-                 contextual_date_col, contextual_geoid_col, contextual_data_col):
+def _init_worker(hrs_data, precomputed_lag_df, contextual_lookup,
+                 contextual_data_col):
     """Store shared read-only data in each worker process's global namespace."""
     _worker_shared['hrs_data'] = hrs_data
     _worker_shared['precomputed_lag_df'] = precomputed_lag_df
-    _worker_shared['preloaded_contextual_df'] = preloaded_contextual_df
-    _worker_shared['contextual_date_col'] = contextual_date_col
-    _worker_shared['contextual_geoid_col'] = contextual_geoid_col
+    _worker_shared['contextual_lookup'] = contextual_lookup
     _worker_shared['contextual_data_col'] = contextual_data_col
 
 
@@ -651,9 +665,7 @@ def _process_single_lag_worker(n, id_col, temp_dir, prefix,
         file_format=file_format,
         geoid_col=geoid_col,
         precomputed_lag_df=_worker_shared['precomputed_lag_df'],
-        preloaded_contextual_df=_worker_shared['preloaded_contextual_df'],
-        contextual_date_col=_worker_shared['contextual_date_col'],
-        contextual_geoid_col=_worker_shared['contextual_geoid_col'],
+        contextual_lookup=_worker_shared['contextual_lookup'],
         contextual_data_col=_worker_shared['contextual_data_col'],
     )
 
@@ -668,9 +680,7 @@ def _process_single_lag_internal(
     file_format: str = "parquet",
     geoid_col: Optional[str] = None,
     precomputed_lag_df: Optional[pd.DataFrame] = None,
-    preloaded_contextual_df: Optional[pd.DataFrame] = None,
-    contextual_date_col: Optional[str] = None,
-    contextual_geoid_col: Optional[str] = None,
+    contextual_lookup: Optional[pd.DataFrame] = None,
     contextual_data_col: Union[str, List[str], None] = None,
     contextual_dir: Optional[DailyMeasureDataDir] = None,
 ) -> Optional[Path]:
@@ -700,16 +710,16 @@ def _process_single_lag_internal(
         Name of the GEOID column in HRS data.
     precomputed_lag_df : pd.DataFrame, optional
         Pre-computed DataFrame with date and GEOID columns. If provided, skips computation.
-    preloaded_contextual_df : pd.DataFrame, optional
-        Pre-loaded contextual data. If provided, skips loading from contextual_dir.
-    contextual_date_col : str, optional
-        Name of date column in contextual data.
-    contextual_geoid_col : str, optional
-        Name of GEOID column in contextual data.
+    contextual_lookup : pd.DataFrame, optional
+        ``(date, geoid)``-indexed contextual lookup (from
+        :meth:`HRSContextLinker.build_contextual_lookup`). Used together with
+        ``precomputed_lag_df``; when omitted the data is loaded from
+        ``contextual_dir`` and the lookup is built here.
     contextual_data_col : str or List[str], optional
         Name(s) of data column(s) in contextual data.
     contextual_dir : DailyMeasureDataDir, optional
-        Contextual dataset directory. Only needed if metadata columns or preloaded data not provided.
+        Contextual dataset directory. Only needed when ``contextual_lookup`` is
+        not provided.
 
     Returns
     -------
@@ -719,16 +729,11 @@ def _process_single_lag_internal(
     """
     try:
         # If pre-computed data is provided, use it directly
-        if precomputed_lag_df is not None and preloaded_contextual_df is not None:
-            # Metadata should be provided when using pre-computed/pre-loaded data
-            if (
-                contextual_date_col is None
-                or contextual_geoid_col is None
-                or contextual_data_col is None
-            ):
+        if precomputed_lag_df is not None and contextual_lookup is not None:
+            if contextual_data_col is None:
                 raise ValueError(
-                    "When using precomputed_lag_df and preloaded_contextual_df, "
-                    "contextual_date_col, contextual_geoid_col, and contextual_data_col must be provided"
+                    "When using precomputed_lag_df with contextual_lookup, "
+                    "contextual_data_col must be provided"
                 )
 
             out_df = HRSContextLinker.output_merged_columns(
@@ -736,9 +741,7 @@ def _process_single_lag_internal(
                 n=n,
                 id_col=id_col,
                 precomputed_lag_df=precomputed_lag_df,
-                preloaded_contextual_df=preloaded_contextual_df,
-                contextual_date_col=contextual_date_col,
-                contextual_geoid_col=contextual_geoid_col,
+                contextual_lookup=contextual_lookup,
                 contextual_data_col=contextual_data_col,
                 include_lag_date=include_lag_date,
                 geoid_col=geoid_col,
@@ -790,15 +793,19 @@ def _process_single_lag_internal(
                 hrs_data,
             )
 
-            # Merge
+            # Build the (date, geoid)-indexed lookup and resolve via reindex.
+            single_lookup = HRSContextLinker.build_contextual_lookup(
+                contextual_df,
+                date_col,
+                contextual_geoid_col_name,
+                data_col,
+            )
             out_df = HRSContextLinker.output_merged_columns(
                 hrs_data,
                 n=n,
                 id_col=id_col,
                 precomputed_lag_df=hrs_with_lag,
-                preloaded_contextual_df=contextual_df,
-                contextual_date_col=date_col,
-                contextual_geoid_col=contextual_geoid_col_name,
+                contextual_lookup=single_lookup,
                 contextual_data_col=data_col,
                 include_lag_date=include_lag_date,
                 geoid_col=geoid_col,

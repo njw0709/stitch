@@ -56,9 +56,7 @@ class ResidentialHistoryHRS:
 
         # Load only once (file read can be expensive)
         self.df = read_data(self.filename)
-        missing = [
-            c for c in (id_col, date_col, geoid_col) if c not in self.df.columns
-        ]
+        missing = [c for c in (id_col, date_col, geoid_col) if c not in self.df.columns]
         if missing:
             raise ValueError(
                 f"Residential history file {self.filename} is missing "
@@ -347,11 +345,15 @@ class HRSContextLinker:
         return f"{n}{unit}_prior"
 
     @staticmethod
-    def _lag_date_colname(datecol: str, n: int, resolution=LinkageResolution.DAILY) -> str:
+    def _lag_date_colname(
+        datecol: str, n: int, resolution=LinkageResolution.DAILY
+    ) -> str:
         return f"{datecol}_{HRSContextLinker._lag_suffix(n, resolution)}"
 
     @staticmethod
-    def _lag_geoid_colname(geoid_col: str, n: int, resolution=LinkageResolution.DAILY) -> str:
+    def _lag_geoid_colname(
+        geoid_col: str, n: int, resolution=LinkageResolution.DAILY
+    ) -> str:
         return f"{geoid_col}_{HRSContextLinker._lag_suffix(n, resolution)}"
 
     @staticmethod
@@ -574,23 +576,69 @@ class HRSContextLinker:
     # 4. Output merged columns for a specific lag (no mutation)
     # ------------------------------------------------------------------
     @staticmethod
+    def build_contextual_lookup(
+        contextual_df: pd.DataFrame,
+        contextual_date_col: str,
+        contextual_geoid_col: str,
+        contextual_data_col: Union[str, List[str]],
+    ) -> pd.DataFrame:
+        """Build a ``(date, geoid)``-indexed lookup table for fast per-lag joins.
+
+        The expensive hash over the contextual data is built exactly once here;
+        each lag then reuses it via a cheap :meth:`pandas.DataFrame.reindex`
+        instead of re-hashing the whole contextual table in a fresh
+        :func:`pandas.merge` (the previous per-lag behaviour). See
+        :meth:`output_merged_columns`.
+
+        The index must be unique for ``reindex`` to be well-defined; duplicate
+        ``(date, geoid)`` pairs are dropped (keeping the first), mirroring the
+        de-duplication the batch/parallel drivers already perform upstream.
+
+        Parameters
+        ----------
+        contextual_df : pd.DataFrame
+            Pre-loaded, filtered contextual data (concatenated across years).
+        contextual_date_col, contextual_geoid_col : str
+            Key column names in *contextual_df*.
+        contextual_data_col : str or List[str]
+            Measure column(s) to retain as lookup values.
+
+        Returns
+        -------
+        pd.DataFrame
+            Frame indexed by ``[contextual_date_col, contextual_geoid_col]`` with
+            only the measure column(s) as data.
+        """
+        if isinstance(contextual_data_col, str):
+            contextual_data_col = [contextual_data_col]
+
+        keys = [contextual_date_col, contextual_geoid_col]
+        lookup = contextual_df[keys + list(contextual_data_col)]
+        # ``reindex`` requires a unique index; defensively drop any duplicate
+        # key pairs (upstream drivers already dedupe, this makes it safe anywhere).
+        if lookup.duplicated(subset=keys).any():
+            lookup = lookup.drop_duplicates(subset=keys, keep="first")
+        return lookup.set_index(keys)
+
+    @staticmethod
     def output_merged_columns(
         hrs_data: "HRSInterviewData",
         n: int,
         id_col: str,
         precomputed_lag_df: pd.DataFrame,
-        preloaded_contextual_df: pd.DataFrame,
-        contextual_date_col: str,
-        contextual_geoid_col: str,
+        contextual_lookup: pd.DataFrame,
         contextual_data_col: Union[str, List[str]],
         include_lag_date: bool = False,
         geoid_col: Optional[str] = None,
     ) -> pd.DataFrame:
         """
-        For a specific lag n, merge pre-computed lag columns with pre-loaded contextual data.
+        For a specific lag n, join pre-computed lag columns with contextual data.
 
-        This method expects pre-computed date/GEOID columns and pre-loaded contextual data
-        for efficiency. Use with process_multiple_lags_batch for best performance.
+        Each lag is resolved with a single vectorized ``reindex`` against the
+        pre-built ``(date, geoid)`` index in *contextual_lookup* (from
+        :meth:`build_contextual_lookup`), so the contextual hash is built once for
+        *all* lags rather than rebuilt on every lag. This is dramatically faster
+        than a per-lag :func:`pandas.merge` when the number of lags is large.
 
         Parameters
         ----------
@@ -603,12 +651,9 @@ class HRSContextLinker:
         precomputed_lag_df : pd.DataFrame
             Pre-computed DataFrame with date and GEOID columns for all lags.
             Should contain: id_col, {datecol}_{n}day_prior, {geoid_col}_{n}day_prior
-        preloaded_contextual_df : pd.DataFrame
-            Pre-loaded and filtered contextual data (already concatenated across years)
-        contextual_date_col : str
-            Name of date column in contextual data (e.g., 'date')
-        contextual_geoid_col : str
-            Name of GEOID column in contextual data (e.g., 'geoid')
+        contextual_lookup : pd.DataFrame
+            ``(date, geoid)``-indexed lookup from :meth:`build_contextual_lookup`,
+            whose columns are the measure column(s).
         contextual_data_col : str or List[str]
             Name(s) of data/measure column(s) in contextual data (e.g., 'tmax', 'pm25', or ['tmax', 'pm25'])
         include_lag_date : bool, default False
@@ -646,34 +691,19 @@ class HRSContextLinker:
                 out_cols.append(n_day_geoid_colname)
             return hrs_copy[out_cols]
 
-        # Use pre-loaded contextual data
-        contextual_df = preloaded_contextual_df
-        right_on = [contextual_date_col, contextual_geoid_col]
+        # Output column names (one per measure), suffixed with the lag date col.
+        new_col_names = [f"{col}_{n_day_colname}" for col in contextual_data_col]
 
-        # Merge
-        merged = pd.merge(
-            hrs_copy,
-            contextual_df,
-            how="left",
-            left_on=[n_day_colname, n_day_geoid_colname],
-            right_on=right_on,
-            suffixes=(None, None),
+        # Single vectorized reindex against the pre-built (date, geoid) index.
+        keys = pd.MultiIndex.from_arrays(
+            [hrs_copy[n_day_colname], hrs_copy[n_day_geoid_colname]]
         )
+        looked_up = contextual_lookup.reindex(keys)
 
-        # Rename contextual columns and build output column list
-        rename_dict = {}
-        new_col_names = []
-        for col in contextual_data_col:
-            new_col_name = f"{col}_{n_day_colname}"
-            rename_dict[col] = new_col_name
-            new_col_names.append(new_col_name)
-
-        merged.rename(columns=rename_dict, inplace=True)
-
-        out_cols = [id_col]
+        data = {id_col: hrs_copy[id_col].to_numpy()}
         if include_lag_date:
-            out_cols.append(n_day_colname)
-            out_cols.append(n_day_geoid_colname)
-        out_cols.extend(new_col_names)
-
-        return merged[out_cols]
+            data[n_day_colname] = hrs_copy[n_day_colname].to_numpy()
+            data[n_day_geoid_colname] = hrs_copy[n_day_geoid_colname].to_numpy()
+        for src, dst in zip(contextual_data_col, new_col_names):
+            data[dst] = looked_up[src].to_numpy()
+        return pd.DataFrame(data)
