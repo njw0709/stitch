@@ -3,6 +3,7 @@ from typing import Optional, List, Union, Callable
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import tempfile
 import uuid
@@ -222,6 +223,22 @@ def extract_unique_geoids(
         all_geoids.update(geoids)
 
     return all_geoids
+
+
+#: Upper bound on parallel workers, regardless of core count.
+#:
+#: Every worker is spawned (not forked), so it pays interpreter startup plus an
+#: unpickle of the shared HRS data and contextual lookup. That cost is per worker
+#: and independent of how much work each one gets, so throughput peaks well below
+#: core count and then falls. Measured on a 16-core machine, 50k rows x 300 lags:
+#: 4 workers 2.63x, 8 workers 2.85x, 16 workers 1.98x. Smaller jobs peak earlier
+#: still (10k x 300: 4 workers 1.96x, 8 workers 1.76x).
+MAX_PARALLEL_WORKERS = 8
+
+
+def _default_max_workers() -> int:
+    """Worker count to use when the memory-aware calculation is unavailable."""
+    return max(1, min(os.cpu_count() or 1, MAX_PARALLEL_WORKERS))
 
 
 def candidate_geoids(
@@ -591,7 +608,10 @@ def process_multiple_lags_parallel(
             if usable_gb > gb_per_worker:
                 max_workers_by_memory = int(usable_gb / gb_per_worker)
                 max_workers_by_cpu = os.cpu_count() or 1
-                max_workers = max(1, min(max_workers_by_memory, max_workers_by_cpu))
+                max_workers = max(
+                    1,
+                    min(max_workers_by_memory, max_workers_by_cpu, MAX_PARALLEL_WORKERS),
+                )
 
                 print(f"🧮 Memory-aware worker calculation:")
                 print(f"   Available memory: {available_gb:.1f} GB")
@@ -599,6 +619,7 @@ def process_multiple_lags_parallel(
                 print(f"   Usable for workers: {usable_gb:.1f} GB")
                 print(f"   Max workers (memory): {max_workers_by_memory}")
                 print(f"   Max workers (CPU): {max_workers_by_cpu}")
+                print(f"   Throughput cap: {MAX_PARALLEL_WORKERS}")
                 print(f"   Selected max_workers: {max_workers}")
             else:
                 max_workers = 1
@@ -607,12 +628,12 @@ def process_multiple_lags_parallel(
                 )
 
         except ImportError:
-            print("⚠️  psutil not available, using default max_workers")
-            max_workers = None
+            print("⚠️  psutil not available, falling back to the throughput cap")
+            max_workers = _default_max_workers()
         except Exception as e:
             print(f"⚠️  Error calculating memory-based max_workers: {e}")
-            print("   Falling back to default max_workers")
-            max_workers = None
+            print("   Falling back to the throughput cap")
+            max_workers = _default_max_workers()
 
     # Build the (date, geoid)-indexed contextual lookup once in the parent so it
     # is serialized to each worker already-hashed; workers then resolve every lag
