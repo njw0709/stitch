@@ -16,6 +16,48 @@ FILENAME_TO_VARNAME_DICT = {
     "heat_index": "HeatIndex",
 }
 
+# Period tokens in filenames. The delimited variants require the digits to
+# start at the beginning of the name or right after a separator, and to not be
+# part of a longer digit run, so that digits embedded in a measure name (e.g.
+# "pm2510" in "NATION-pm2510_daily_2010.dta") are never read as a year. The
+# loose variants are the fallback for names with no delimited token at all
+# (e.g. "heat2010.csv").
+_PERIOD_PATTERN_DELIMITED = re.compile(r"(?:^|[^0-9A-Za-z])(\d{4})_(\d{2})(?!\d)")
+_PERIOD_PATTERN_LOOSE = re.compile(r"(\d{4})_(\d{2})")
+_YEAR_PATTERN_DELIMITED = re.compile(r"(?:^|[^0-9A-Za-z])(\d{4})(?!\d)")
+_YEAR_PATTERN_LOOSE = re.compile(r"(\d{4})")
+
+
+def parse_period_from_filename(
+    filename: str, measure_type: Optional[str] = None
+) -> tuple:
+    """Extract a ``(year, month)`` period from *filename*.
+
+    ``month`` is an ``int`` in 1-12 for a per-month file (``YYYY_MM``) or
+    ``None`` for a per-year file. Raises ``ValueError`` if no year can be
+    found.
+
+    When *measure_type* is given it is removed from the name before parsing,
+    so a measure name containing digits cannot be mistaken for a period::
+
+        >>> parse_period_from_filename("NATION-pm2510_daily_2010.dta", "pm2510")
+        ('2010', None)
+    """
+    name = filename.replace(measure_type, "") if measure_type else filename
+
+    for pattern in (_PERIOD_PATTERN_DELIMITED, _PERIOD_PATTERN_LOOSE):
+        for m in pattern.finditer(name):
+            month = int(m.group(2))
+            if 1 <= month <= 12:
+                return m.group(1), month
+
+    for pattern in (_YEAR_PATTERN_DELIMITED, _YEAR_PATTERN_LOOSE):
+        m = pattern.search(name)
+        if m:
+            return m.group(1), None
+
+    raise ValueError(f"Could not extract year from filename: {filename}")
+
 
 def aggregate_contextual_to_resolution(
     df: pd.DataFrame,
@@ -461,30 +503,21 @@ class DailyMeasureDataDir:
     allowed per year; they are concatenated when that year is loaded. A year
     may not mix a year-level file with month-level files, and exact periods may
     not be duplicated.
+
+    The period token is preferentially read from a delimited position in the
+    name, and ``measure_type`` is excluded from the search, so measure names
+    containing digits are safe: ``NATION-pm2510_daily_2010.dta`` with
+    ``measure_type="pm2510"`` resolves to year ``2010``.
     """
 
-    # ``YYYY_MM`` (per-month) is matched first; ``YYYY`` (per-year) is the
-    # fallback. Month must be a valid 1-12 value to be treated as per-month.
-    PERIOD_PATTERN = re.compile(r"(\d{4})_(\d{2})")
-    YEAR_PATTERN = re.compile(r"(\d{4})")
-
     @classmethod
-    def _parse_period(cls, filename: str) -> tuple:
+    def _parse_period(cls, filename: str, measure_type: Optional[str] = None) -> tuple:
         """Extract a (year, month) period from *filename*.
 
-        Returns ``(year, month)`` where ``month`` is an ``int`` in 1-12 for a
-        per-month file, or ``None`` for a per-year file. Raises ``ValueError``
-        if no 4-digit year can be found.
+        Thin wrapper around :func:`parse_period_from_filename`; see there for
+        the matching rules.
         """
-        m = cls.PERIOD_PATTERN.search(filename)
-        if m:
-            month = int(m.group(2))
-            if 1 <= month <= 12:
-                return m.group(1), month
-        y = cls.YEAR_PATTERN.search(filename)
-        if not y:
-            raise ValueError(f"Could not extract year from filename: {filename}")
-        return y.group(1), None
+        return parse_period_from_filename(filename, measure_type)
 
     def __init__(
         self,
@@ -690,7 +723,7 @@ class DailyMeasureDataDir:
         seen_months: Dict[str, set] = {}
 
         for f in self.files:
-            year, month = self._parse_period(f.name)
+            year, month = self._parse_period(f.name, self.measure_type)
 
             if month is None:
                 # Per-year file

@@ -79,6 +79,35 @@ def test_parse_period_no_year_raises():
         DailyMeasureDataDir._parse_period("heat_index.csv")
 
 
+def test_parse_period_ignores_digits_inside_measure_name():
+    # A 4-digit code inside the measure name is not delimited, so the real
+    # year token wins -- with or without measure_type being passed.
+    assert DailyMeasureDataDir._parse_period("NATION-pm2510_daily_2010.dta") == (
+        "2010",
+        None,
+    )
+    assert DailyMeasureDataDir._parse_period(
+        "NATION-pm2510_daily_2010.dta", "pm2510"
+    ) == ("2010", None)
+    assert DailyMeasureDataDir._parse_period(
+        "NATION-pm2510_daily_2016_03.dta", "pm2510"
+    ) == ("2016", 3)
+
+
+def test_parse_period_measure_type_stripped_before_parsing():
+    # Even when the measure code sits at a delimited position, excluding
+    # measure_type keeps the real year.
+    assert DailyMeasureDataDir._parse_period("2510_daily_2010.dta", "2510") == (
+        "2010",
+        None,
+    )
+
+
+def test_parse_period_undelimited_year_still_parses():
+    # No delimited token anywhere -> fall back to a loose 4-digit search.
+    assert DailyMeasureDataDir._parse_period("heat2010.csv") == ("2010", None)
+
+
 # ---------------------------------------------------------------------------
 # Discovery / grouping
 # ---------------------------------------------------------------------------

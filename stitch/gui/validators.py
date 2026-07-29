@@ -4,10 +4,10 @@ Validation utilities for the HRS Linkage Tool GUI.
 
 from pathlib import Path
 from typing import List, Optional, Tuple
-import re
 
 import pandas as pd
 
+from ..daily_measure import parse_period_from_filename
 from ..io_utils import read_data, get_file_format
 
 
@@ -151,13 +151,15 @@ def validate_contextual_directory(
             msg += f" with extension '{file_extension}'"
         return False, [], msg
 
-    # Extract years
-    year_pattern = re.compile(r"(\d{4})")
+    # Extract years using the same rules as DailyMeasureDataDir, so the years
+    # previewed here match the years the run will actually discover.
     years = []
     for f in files:
-        m = year_pattern.search(f.name)
-        if m:
-            years.append(m.group(1))
+        try:
+            year, _month = parse_period_from_filename(f.name, measure_type)
+        except ValueError:
+            continue
+        years.append(year)
 
     years = sorted(set(years))
 
