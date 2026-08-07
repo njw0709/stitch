@@ -126,7 +126,7 @@ class ResidentialHistoryPage(FieldErrorMixin, QWizardPage):
 
         for combo in self._column_combos():
             combo.currentTextChanged.connect(
-                lambda _text, c=combo: self._set_field_error(c, False)
+                lambda _text, c=combo: self._on_column_selection_changed(c)
             )
 
         res_hist_layout.addLayout(columns_layout)
@@ -241,6 +241,10 @@ class ResidentialHistoryPage(FieldErrorMixin, QWizardPage):
         """The three role dropdowns, in the order they appear on the page."""
         return (self.id_combo, self.date_combo, self.geoid_combo)
 
+    def _on_column_selection_changed(self, combo):
+        """Clear the combo's error highlight once the user changes it."""
+        self._set_field_error(combo, False)
+
     def _clear_column_combos(self):
         """Clear all column combo boxes."""
         for combo in self._column_combos():
@@ -278,17 +282,43 @@ class ResidentialHistoryPage(FieldErrorMixin, QWizardPage):
         self.completeChanged.emit()
 
     def validatePage(self):
-        """Reject a configuration where one column is asked to play two roles.
+        """Validate the page when the user leaves it.
 
-        All three columns are genuinely read — the ID is coerced to an integer
-        key, the move dates are parsed, the GEOIDs are normalized — so any
-        overlap either fails cryptically or produces silently empty linkage.
+        An unused residential history is always valid. Otherwise the required
+        inputs are reported first, then the role collisions: all three columns
+        are genuinely read — the ID is coerced to an integer key, the move
+        dates are parsed, the GEOIDs are normalized — so any overlap either
+        fails cryptically or produces silently empty linkage.
         """
         if not self.use_res_hist_checkbox.isChecked():
+            self._set_field_error(self.file_picker.path_edit, False)
             for combo in self._column_combos():
                 self._set_field_error(combo, False)
             self.validation_label.setText("")
             return True
+
+        problems = []
+
+        file_ok = bool(self.file_picker.get_path()) and self.file_picker.is_valid()
+        self._set_field_error(self.file_picker.path_edit, not file_ok)
+        if not file_ok:
+            problems.append("a valid residential history file")
+
+        for combo, label in (
+            (self.id_combo, "an ID column"),
+            (self.date_combo, "a move date column"),
+            (self.geoid_combo, "a GEOID column"),
+        ):
+            selected = bool(combo.currentText())
+            self._set_field_error(combo, not selected)
+            if not selected:
+                problems.append(label)
+
+        if problems:
+            self.validation_label.setText(
+                "✗ Please provide: " + ", ".join(problems) + "."
+            )
+            return False
 
         id_col = self.id_combo.currentText()
         date_col = self.date_combo.currentText()
@@ -310,25 +340,5 @@ class ResidentialHistoryPage(FieldErrorMixin, QWizardPage):
         return True
 
     def isComplete(self):
-        """Check if the page is complete."""
-        # If not using residential history, page is complete
-        if not self.use_res_hist_checkbox.isChecked():
-            return True
-
-        # If using residential history, must have valid file and all columns selected
-        if not self.file_picker.get_path():
-            return False
-        if not self.file_picker.is_valid():
-            return False
-
-        # Check all combos have selections
-        if not all(
-            [
-                self.id_combo.currentText(),
-                self.date_combo.currentText(),
-                self.geoid_combo.currentText(),
-            ]
-        ):
-            return False
-
+        """Keep the Next button interactive; validation runs in validatePage."""
         return True

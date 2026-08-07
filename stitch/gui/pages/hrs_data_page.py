@@ -96,7 +96,7 @@ class HRSDataPage(FieldErrorMixin, QWizardPage):
 
         for combo in self._column_combos():
             combo.currentTextChanged.connect(
-                lambda _text, c=combo: self._set_field_error(c, False)
+                lambda _text, c=combo: self._on_column_selection_changed(c)
             )
 
         config_note = QLabel(
@@ -124,15 +124,20 @@ class HRSDataPage(FieldErrorMixin, QWizardPage):
         layout.addStretch()
         self.setLayout(layout)
 
-        # Register fields for wizard
-        self.registerField("hrs_data_path*", self.file_picker.path_edit)
-        self.registerField("date_col*", self.date_column_combo, "currentText")
-        self.registerField("id_col*", self.id_col_combo, "currentText")
-        self.registerField("geoid_col*", self.geoid_col_combo, "currentText")
+        # Register fields (no mandatory markers: the Next button stays
+        # interactive and validatePage explains what is missing or wrong)
+        self.registerField("hrs_data_path", self.file_picker.path_edit)
+        self.registerField("date_col", self.date_column_combo, "currentText")
+        self.registerField("id_col", self.id_col_combo, "currentText")
+        self.registerField("geoid_col", self.geoid_col_combo, "currentText")
 
     def _column_combos(self):
         """The three role dropdowns, in the order they appear on the page."""
         return (self.date_column_combo, self.id_col_combo, self.geoid_col_combo)
+
+    def _on_column_selection_changed(self, combo):
+        """Clear the combo's error highlight once the user changes it."""
+        self._set_field_error(combo, False)
 
     def _on_file_selected(self, file_path: str):
         """Handle file selection."""
@@ -221,13 +226,38 @@ class HRSDataPage(FieldErrorMixin, QWizardPage):
         self.completeChanged.emit()
 
     def validatePage(self):
-        """Reject a configuration where one column is asked to play two roles.
+        """Validate the page when the user leaves it.
 
-        The loader normalizes the date column and then the ID column, so a
-        column serving as both comes back out as epoch nanoseconds and the run
-        fails deep inside the lag machinery; the GEOID collisions corrupt more
-        quietly still.
+        Two passes. First the required inputs, so an unfinished page says what
+        is missing instead of silently refusing to advance. Then the role
+        collisions: the loader normalizes the date column and then the ID
+        column, so a column serving as both comes back out as epoch
+        nanoseconds and the run fails deep inside the lag machinery; the GEOID
+        collisions corrupt more quietly still.
         """
+        problems = []
+
+        file_ok = bool(self.file_picker.get_path()) and self.file_picker.is_valid()
+        self._set_field_error(self.file_picker.path_edit, not file_ok)
+        if not file_ok:
+            problems.append("a valid survey data file")
+
+        for combo, label in (
+            (self.date_column_combo, "a date column"),
+            (self.id_col_combo, "an ID column"),
+            (self.geoid_col_combo, "a GEOID column"),
+        ):
+            selected = bool(combo.currentText())
+            self._set_field_error(combo, not selected)
+            if not selected:
+                problems.append(label)
+
+        if problems:
+            self.validation_label.setText(
+                "✗ Please provide: " + ", ".join(problems) + "."
+            )
+            return False
+
         date_col = self.date_column_combo.currentText()
         id_col = self.id_col_combo.currentText()
         geoid_col = self.geoid_col_combo.currentText()
@@ -246,16 +276,5 @@ class HRSDataPage(FieldErrorMixin, QWizardPage):
         return True
 
     def isComplete(self):
-        """Check if the page is complete."""
-        # Must have valid file and date column selected
-        if not self.file_picker.get_path():
-            return False
-        if not self.file_picker.is_valid():
-            return False
-        if not self.date_column_combo.currentText():
-            return False
-        if not self.id_col_combo.currentText():
-            return False
-        if not self.geoid_col_combo.currentText():
-            return False
+        """Keep the Next button interactive; validation runs in validatePage."""
         return True

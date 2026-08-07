@@ -51,24 +51,30 @@ def _write_survey(tmp_path, name="survey.dta", extra_columns=()):
 # ---------------------------------------------------------------------------
 
 
-def _survey_page(qtbot, date_col=None, id_col=None, geoid_col=None):
+def _survey_page(qtbot, tmp_path, date_col=None, id_col=None, geoid_col=None):
+    """A survey page with a file loaded and the three roles chosen by hand."""
     page = HRSDataPage()
     qtbot.addWidget(page)
-    _populate(page.date_column_combo, SURVEY_COLUMNS, date_col)
-    _populate(page.id_col_combo, SURVEY_COLUMNS, id_col)
-    _populate(page.geoid_col_combo, SURVEY_COLUMNS, geoid_col)
+    page.file_picker.set_path(str(_write_survey(tmp_path)))
+    for combo, column in (
+        (page.date_column_combo, date_col),
+        (page.id_col_combo, id_col),
+        (page.geoid_col_combo, geoid_col),
+    ):
+        if column is not None:
+            combo.setCurrentText(column)
     return page
 
 
-def test_survey_page_accepts_distinct_columns(qtbot):
-    page = _survey_page(qtbot, "iwdate", "hhidpn", "GEOID2010")
+def test_survey_page_accepts_distinct_columns(qtbot, tmp_path):
+    page = _survey_page(qtbot, tmp_path, "iwdate", "hhidpn", "GEOID2010")
     assert page.validatePage() is True
     assert page.validation_label.text() == ""
 
 
-def test_survey_page_rejects_id_equal_to_date(qtbot):
+def test_survey_page_rejects_id_equal_to_date(qtbot, tmp_path):
     """The reported bug, caught on the page that configures it."""
-    page = _survey_page(qtbot, "iwdate", "iwdate", "GEOID2010")
+    page = _survey_page(qtbot, tmp_path, "iwdate", "iwdate", "GEOID2010")
 
     assert page.validatePage() is False
     assert "iwdate" in page.validation_label.text()
@@ -78,13 +84,13 @@ def test_survey_page_rejects_id_equal_to_date(qtbot):
     assert page.geoid_col_combo.styleSheet() == ""
 
 
-def test_survey_page_rejects_geoid_equal_to_id(qtbot):
-    page = _survey_page(qtbot, "iwdate", "hhidpn", "hhidpn")
+def test_survey_page_rejects_geoid_equal_to_id(qtbot, tmp_path):
+    page = _survey_page(qtbot, tmp_path, "iwdate", "hhidpn", "hhidpn")
     assert page.validatePage() is False
 
 
-def test_survey_page_highlight_clears_on_edit(qtbot):
-    page = _survey_page(qtbot, "iwdate", "iwdate", "GEOID2010")
+def test_survey_page_highlight_clears_on_edit(qtbot, tmp_path):
+    page = _survey_page(qtbot, tmp_path, "iwdate", "iwdate", "GEOID2010")
     assert page.validatePage() is False
 
     page.id_col_combo.setCurrentText("hhidpn")
@@ -104,7 +110,43 @@ def test_survey_page_does_not_preselect_columns(qtbot, tmp_path):
     for combo in page._column_combos():
         assert combo.currentIndex() == -1
         assert combo.currentText() == ""
-    assert page.isComplete() is False
+
+
+def test_survey_page_reports_missing_selections(qtbot, tmp_path):
+    """An unfinished page says what is missing rather than refusing silently."""
+    page = HRSDataPage()
+    qtbot.addWidget(page)
+    page.file_picker.set_path(str(_write_survey(tmp_path)))
+
+    assert page.isComplete() is True  # Next stays clickable
+    assert page.validatePage() is False
+    message = page.validation_label.text()
+    assert message.startswith("✗ Please provide:")
+    for expected in ("a date column", "an ID column", "a GEOID column"):
+        assert expected in message
+    for combo in page._column_combos():
+        assert combo.styleSheet() == HRSDataPage.ERROR_STYLE
+
+
+def test_survey_page_next_button_enabled_once_columns_are_chosen(qtbot, tmp_path):
+    """Regression: Next must not stay greyed out after the columns are picked."""
+    from PyQt6.QtWidgets import QWizard
+
+    wizard = JobConfigWizard()
+    qtbot.addWidget(wizard)
+    wizard.show()
+    page = wizard.page(JobConfigWizard.PAGE_HRS_DATA)
+    page.file_picker.set_path(str(_write_survey(tmp_path)))
+
+    next_button = wizard.button(QWizard.WizardButton.NextButton)
+    assert next_button.isEnabled() is True
+
+    page.date_column_combo.setCurrentText("iwdate")
+    page.id_col_combo.setCurrentText("hhidpn")
+    page.geoid_col_combo.setCurrentText("GEOID2010")
+
+    assert next_button.isEnabled() is True
+    assert page.validatePage() is True
 
 
 # ---------------------------------------------------------------------------
@@ -112,26 +154,62 @@ def test_survey_page_does_not_preselect_columns(qtbot, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _res_hist_page(qtbot, *, checked, id_col=None, date_col=None, geoid_col=None):
+def _write_res_hist(tmp_path):
+    path = tmp_path / "res_hist.dta"
+    pd.DataFrame(
+        {
+            "hhidpn": [1, 2],
+            "move_date": ["2015", "2016"],
+            "GEOID": ["01001020100", "01001020200"],
+        }
+    ).to_stata(path, write_index=False)
+    return path
+
+
+def _res_hist_page(
+    qtbot, tmp_path=None, *, checked, id_col=None, date_col=None, geoid_col=None
+):
     page = ResidentialHistoryPage()
     qtbot.addWidget(page)
     page.use_res_hist_checkbox.setChecked(checked)
-    _populate(page.id_combo, ["hhidpn", "move_date", "GEOID"], id_col)
-    _populate(page.date_combo, ["hhidpn", "move_date", "GEOID"], date_col)
-    _populate(page.geoid_combo, ["hhidpn", "move_date", "GEOID"], geoid_col)
+    if tmp_path is not None:
+        page.file_picker.set_path(str(_write_res_hist(tmp_path)))
+    for combo, column in (
+        (page.id_combo, id_col),
+        (page.date_combo, date_col),
+        (page.geoid_combo, geoid_col),
+    ):
+        if column is not None:
+            combo.setCurrentText(column)
     return page
 
 
-def test_residential_history_page_accepts_distinct_columns(qtbot):
+def test_residential_history_page_accepts_distinct_columns(qtbot, tmp_path):
     page = _res_hist_page(
-        qtbot, checked=True, id_col="hhidpn", date_col="move_date", geoid_col="GEOID"
+        qtbot,
+        tmp_path,
+        checked=True,
+        id_col="hhidpn",
+        date_col="move_date",
+        geoid_col="GEOID",
     )
     assert page.validatePage() is True
 
 
-def test_residential_history_page_rejects_collision(qtbot):
+def test_residential_history_page_reports_missing_selections(qtbot):
+    """Enabled but unfinished: Next stays clickable and the page explains."""
+    page = _res_hist_page(qtbot, checked=True)
+
+    assert page.isComplete() is True
+    assert page.validatePage() is False
+    assert page.validation_label.text().startswith("✗ Please provide:")
+    assert "a valid residential history file" in page.validation_label.text()
+
+
+def test_residential_history_page_rejects_collision(qtbot, tmp_path):
     page = _res_hist_page(
         qtbot,
+        tmp_path,
         checked=True,
         id_col="hhidpn",
         date_col="move_date",
