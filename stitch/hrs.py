@@ -14,6 +14,11 @@ from .io_utils import (
     write_data,
 )
 from .temporal import LinkageResolution
+from .validation import (
+    check_residential_history_column_roles,
+    check_survey_column_roles,
+    format_problems,
+)
 
 
 # ---------------------------------------------------------------------
@@ -62,6 +67,11 @@ class ResidentialHistoryHRS:
                 f"Residential history file {self.filename} is missing "
                 f"column(s) {missing}. Available columns: {list(self.df.columns)}"
             )
+        # Each role must own its column: the writes below (and the move-date
+        # parsing) would otherwise overwrite one role's values with another's.
+        problems = check_residential_history_column_roles(id_col, date_col, geoid_col)
+        if problems:
+            raise ValueError(format_problems(problems))
         # Normalize identifier type to integer (nullable) for consistent keying
         self.df[self.id_col] = pd.to_numeric(
             self.df[self.id_col], errors="coerce"
@@ -276,6 +286,14 @@ class HRSInterviewData:
         self.geoid_treatment = geoid_treatment
         self.geoid_numeric_type = geoid_numeric_type
         self.linkage_resolution = LinkageResolution.from_str(linkage_resolution)
+
+        # Each role must own its column. The two normalizations below write to
+        # the frame in sequence, so a date column that doubles as the ID column
+        # comes back out as epoch nanoseconds; a GEOID column sharing a name
+        # collides in lag-column naming and in GEOID normalization later on.
+        problems = check_survey_column_roles(datecol, hhidpn, geoid_col)
+        if problems:
+            raise ValueError(format_problems(problems))
 
         # Normalize the interview/reference date column to datetime. The format
         # is inferred per value so coarse values (year-only, year-month) are

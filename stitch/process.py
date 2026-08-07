@@ -40,6 +40,7 @@ from .io_utils import (
     write_data,
 )
 from .temporal import AggMethod, LinkageResolution, infer_temporal_resolution
+from .validation import validate_pipeline_args, validate_pipeline_survey_columns
 
 
 def convert_geoid_columns(
@@ -1202,6 +1203,13 @@ def run_pipeline(
         raise FileNotFoundError(f"HRS file not found: {hrs_path}")
     if not context_dir.exists():
         raise FileNotFoundError(f"Contextual data directory not found: {context_dir}")
+
+    # Reject a self-inconsistent configuration (two roles pointing at the same
+    # column, an output path that would overwrite an input) before anything is
+    # read or written. These failures surface far from their cause otherwise —
+    # see stitch/validation.py.
+    validate_pipeline_args(args)
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     post_lag_average = bool(getattr(args, "post_lag_average", False))
@@ -1288,6 +1296,11 @@ def run_pipeline(
         data_cols = [col.strip() for col in args.data_col.split(",")]
     else:
         data_cols = args.data_col
+
+    # The survey frame is loaded but nothing has been written yet: the last
+    # chance to catch a survey file that already carries the columns this run
+    # would create (i.e. the output of an earlier run being fed back in).
+    validate_pipeline_survey_columns(args, hrs_epi_data.df.columns)
 
     contextual_data_all = DailyMeasureDataDir(
         context_dir,

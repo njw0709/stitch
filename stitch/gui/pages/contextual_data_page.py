@@ -22,18 +22,24 @@ from PyQt6.QtWidgets import (
 
 from ..widgets.file_picker import DirectoryPicker
 from ..widgets.data_preview_table import DataPreviewTable
+from ...validation import duplicate_column_values
 from ..validators import (
     validate_contextual_directory,
+    validate_contextual_column_roles,
     check_column_consistency,
     load_preview_data,
 )
 from ...temporal import LinkageResolution, infer_temporal_resolution
+from .field_error import FieldErrorMixin
 
 
-class ContextualDataPage(QWizardPage):
+class ContextualDataPage(FieldErrorMixin, QWizardPage):
     """
     Wizard page for configuring contextual data directory.
     """
+
+    #: Shown in a column dropdown until the user picks a column.
+    COLUMN_PLACEHOLDER = "Select a column..."
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -199,12 +205,14 @@ class ContextualDataPage(QWizardPage):
         self.data_col_hidden.setVisible(False)
 
         self.geoid_col_combo = QComboBox()
+        self.geoid_col_combo.setPlaceholderText(self.COLUMN_PLACEHOLDER)
         self.geoid_col_combo.currentTextChanged.connect(
             lambda: self._set_field_error(self.geoid_col_combo, False)
         )
         columns_layout.addRow("GEOID Column:", self.geoid_col_combo)
 
         self.date_col_combo = QComboBox()
+        self.date_col_combo.setPlaceholderText(self.COLUMN_PLACEHOLDER)
         self.date_col_combo.currentTextChanged.connect(
             lambda: self._set_field_error(self.date_col_combo, False)
         )
@@ -345,15 +353,20 @@ class ContextualDataPage(QWizardPage):
         for item in selected_items:
             self.data_col_list.takeItem(self.data_col_list.row(item))
 
+        self._set_field_error(self.data_col_list, False)
         self._update_data_col_field()
         self.completeChanged.emit()
 
+    def _data_col_values(self):
+        """The measure columns currently in the list."""
+        return [
+            self.data_col_list.item(i).text()
+            for i in range(self.data_col_list.count())
+        ]
+
     def _update_data_col_field(self):
         """Update the hidden field with comma-separated list of data columns."""
-        columns = []
-        for i in range(self.data_col_list.count()):
-            columns.append(self.data_col_list.item(i).text())
-        self.data_col_hidden.setText(",".join(columns))
+        self.data_col_hidden.setText(",".join(self._data_col_values()))
 
     def _load_preview(self, file_path: Path):
         """Load preview of a data file."""
@@ -369,18 +382,17 @@ class ContextualDataPage(QWizardPage):
         # Populate column dropdowns
         columns = preview_df.columns.tolist()
 
+        # The source combo is a picker, not a configured value, so it keeps its
+        # first entry selected. The two role dropdowns select nothing: guessing
+        # a role from a column name is how one column ends up serving two.
         self.data_col_source_combo.clear()
         self.data_col_source_combo.addItems(columns)
 
-        self.geoid_col_combo.clear()
-        self.geoid_col_combo.addItems(columns)
-
-        self.date_col_combo.clear()
-        self.date_col_combo.addItems(columns)
-
-        # Try to set defaults
-        self._set_default_if_exists(self.geoid_col_combo, "GEOID10")
-        self._set_default_if_exists(self.date_col_combo, "Date")
+        for combo in (self.geoid_col_combo, self.date_col_combo):
+            combo.clear()
+            combo.addItems(columns)
+            combo.setCurrentIndex(-1)
+            self._set_field_error(combo, False)
 
         self._update_inferred_resolution()
 
@@ -416,12 +428,6 @@ class ContextualDataPage(QWizardPage):
         index = combo.findText(default_value)
         if index >= 0:
             combo.setCurrentIndex(index)
-
-    ERROR_STYLE = "border: 2px solid #dc3545; border-radius: 3px;"
-
-    def _set_field_error(self, widget, has_error: bool):
-        """Toggle a red error border on a widget."""
-        widget.setStyleSheet(self.ERROR_STYLE if has_error else "")
 
     def load_from_args(self, args):
         """Restore this page's state from a previously built args namespace."""
@@ -505,6 +511,27 @@ class ContextualDataPage(QWizardPage):
 
         # Files must have been validated via Load preview
         files_ok = bool(self.file_paths)
+
+        # Role collisions are only meaningful once every field is filled in, so
+        # they are reported after the missing-field pass rather than alongside.
+        if not problems and files_ok:
+            date_col = self.date_col_combo.currentText()
+            geoid_col = self.geoid_col_combo.currentText()
+            data_cols = self._data_col_values()
+            is_valid, error_msg = validate_contextual_column_roles(
+                date_col, geoid_col, data_cols
+            )
+            if not is_valid:
+                duplicates = duplicate_column_values(
+                    [date_col, geoid_col, *data_cols]
+                )
+                self._set_field_error(self.date_col_combo, date_col in duplicates)
+                self._set_field_error(self.geoid_col_combo, geoid_col in duplicates)
+                self._set_field_error(
+                    self.data_col_list, any(c in duplicates for c in data_cols)
+                )
+                self.validation_label.setText(f"✗ {error_msg}")
+                return False
 
         if problems or not files_ok:
             if not files_ok and not problems:

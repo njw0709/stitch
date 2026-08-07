@@ -6,6 +6,7 @@ import re
 
 from .io_utils import get_file_format, normalize_geoid_for_processing, read_data
 from .temporal import AggMethod, LinkageResolution
+from .validation import check_contextual_column_roles, format_problems
 
 # Map file prefix to column name
 FILENAME_TO_VARNAME_DICT = {
@@ -226,6 +227,16 @@ class DailyMeasureData:
         if isinstance(data_col, str):
             data_col = [data_col]
         self.data_col = data_col
+
+        # Each role must own its column: ``usecols`` below is
+        # ``[date_col, geoid_col] + data_col``, and a repeated entry either
+        # fails at read time (Parquet/Feather/Stata) or silently yields
+        # duplicate labels (CSV).
+        problems = check_contextual_column_roles(
+            self.date_col, self.geoid_col, self.data_col
+        )
+        if problems:
+            raise ValueError(format_problems(problems))
 
         # --- 1. Inspect header and apply rename if needed ---
         header = self._read_header()

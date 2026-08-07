@@ -20,10 +20,16 @@ from PyQt6.QtWidgets import (
 from ..widgets.file_picker import FilePicker
 from ..widgets.data_preview_table import DataPreviewTable
 from ...io_utils import infer_datetime_series, read_data
-from ..validators import validate_data_file, load_preview_data
+from ..validators import (
+    load_preview_data,
+    validate_data_file,
+    validate_residential_history_column_roles,
+)
+from ...validation import duplicate_column_values
+from .field_error import FieldErrorMixin
 
 
-class ResidentialHistoryPage(QWizardPage):
+class ResidentialHistoryPage(FieldErrorMixin, QWizardPage):
     """
     Wizard page for optional residential history configuration.
 
@@ -32,6 +38,9 @@ class ResidentialHistoryPage(QWizardPage):
     the earliest entry per person is their residence at survey entry), and a
     GEOID column.
     """
+
+    #: Shown in a column dropdown until the user picks a column.
+    COLUMN_PLACEHOLDER = "Select a column..."
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -100,15 +109,25 @@ class ResidentialHistoryPage(QWizardPage):
         # Column selections
         columns_layout = QFormLayout()
 
+        # Nothing is pre-selected: every column is an explicit choice, so a
+        # wrong guess can never be carried into a run unnoticed.
         self.id_combo = QComboBox()
+        self.id_combo.setPlaceholderText(self.COLUMN_PLACEHOLDER)
         columns_layout.addRow("ID Column:", self.id_combo)
 
         self.date_combo = QComboBox()
+        self.date_combo.setPlaceholderText(self.COLUMN_PLACEHOLDER)
         self.date_combo.currentTextChanged.connect(self._on_date_col_changed)
         columns_layout.addRow("Move Date Column:", self.date_combo)
 
         self.geoid_combo = QComboBox()
+        self.geoid_combo.setPlaceholderText(self.COLUMN_PLACEHOLDER)
         columns_layout.addRow("GEOID Column:", self.geoid_combo)
+
+        for combo in self._column_combos():
+            combo.currentTextChanged.connect(
+                lambda _text, c=combo: self._set_field_error(c, False)
+            )
 
         res_hist_layout.addLayout(columns_layout)
 
@@ -116,6 +135,13 @@ class ResidentialHistoryPage(QWizardPage):
         self.date_check_label = QLabel("")
         self.date_check_label.setWordWrap(True)
         res_hist_layout.addWidget(self.date_check_label)
+
+        # Validation problems that block Next, kept separate from the
+        # date-parsing feedback above.
+        self.validation_label = QLabel("")
+        self.validation_label.setWordWrap(True)
+        self.validation_label.setStyleSheet("color: #dc3545;")
+        res_hist_layout.addWidget(self.validation_label)
 
         self.res_hist_widget.setLayout(res_hist_layout)
         self.res_hist_widget.setEnabled(False)
@@ -164,17 +190,12 @@ class ResidentialHistoryPage(QWizardPage):
         # Populate column dropdowns
         columns = preview_df.columns.tolist()
 
-        self.id_combo.clear()
-        self.id_combo.addItems(columns)
-        self._set_default_if_exists(self.id_combo, "hhidpn")
-
-        self.date_combo.clear()
-        self.date_combo.addItems(columns)
-        self._set_default_if_exists(self.date_combo, "move_date")
-
-        self.geoid_combo.clear()
-        self.geoid_combo.addItems(columns)
-        self._set_default_if_exists(self.geoid_combo, "GEOID")
+        for combo in self._column_combos():
+            combo.clear()
+            combo.addItems(columns)
+            combo.setCurrentIndex(-1)
+            self._set_field_error(combo, False)
+        self.validation_label.setText("")
 
         self._on_date_col_changed(self.date_combo.currentText())
         self.completeChanged.emit()
@@ -216,12 +237,17 @@ class ResidentialHistoryPage(QWizardPage):
         except Exception as e:
             self.date_check_label.setText(f"⚠️ Could not check date column: {e}")
 
+    def _column_combos(self):
+        """The three role dropdowns, in the order they appear on the page."""
+        return (self.id_combo, self.date_combo, self.geoid_combo)
+
     def _clear_column_combos(self):
         """Clear all column combo boxes."""
-        self.id_combo.clear()
-        self.date_combo.clear()
-        self.geoid_combo.clear()
+        for combo in self._column_combos():
+            combo.clear()
+            self._set_field_error(combo, False)
         self.date_check_label.setText("")
+        self.validation_label.setText("")
 
     def _set_default_if_exists(self, combo: QComboBox, default_value: str):
         """Set combo box to default value if it exists in the list."""
@@ -250,6 +276,38 @@ class ResidentialHistoryPage(QWizardPage):
             self.use_res_hist_checkbox.setChecked(False)
 
         self.completeChanged.emit()
+
+    def validatePage(self):
+        """Reject a configuration where one column is asked to play two roles.
+
+        All three columns are genuinely read — the ID is coerced to an integer
+        key, the move dates are parsed, the GEOIDs are normalized — so any
+        overlap either fails cryptically or produces silently empty linkage.
+        """
+        if not self.use_res_hist_checkbox.isChecked():
+            for combo in self._column_combos():
+                self._set_field_error(combo, False)
+            self.validation_label.setText("")
+            return True
+
+        id_col = self.id_combo.currentText()
+        date_col = self.date_combo.currentText()
+        geoid_col = self.geoid_combo.currentText()
+
+        is_valid, error_msg = validate_residential_history_column_roles(
+            id_col, date_col, geoid_col
+        )
+
+        duplicates = duplicate_column_values([id_col, date_col, geoid_col])
+        for combo in self._column_combos():
+            self._set_field_error(combo, combo.currentText() in duplicates)
+
+        if not is_valid:
+            self.validation_label.setText(f"✗ {error_msg}")
+            return False
+
+        self.validation_label.setText("")
+        return True
 
     def isComplete(self):
         """Check if the page is complete."""

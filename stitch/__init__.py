@@ -26,6 +26,17 @@ from .process import (
     process_multiple_lags_batch,
     process_multiple_lags_parallel,
 )
+from .validation import (
+    check_contextual_column_roles,
+    check_generated_column_collisions,
+    check_output_path_conflicts,
+    check_pipeline_args,
+    check_pipeline_survey_columns,
+    check_residential_history_column_roles,
+    check_survey_column_roles,
+    validate_pipeline_args,
+    validate_pipeline_survey_columns,
+)
 
 __all__ = [
     # Version
@@ -51,4 +62,14 @@ __all__ = [
     "extract_unique_geoids",
     "process_multiple_lags_batch",
     "process_multiple_lags_parallel",
+    # Configuration validation
+    "check_survey_column_roles",
+    "check_residential_history_column_roles",
+    "check_contextual_column_roles",
+    "check_output_path_conflicts",
+    "check_generated_column_collisions",
+    "check_pipeline_args",
+    "check_pipeline_survey_columns",
+    "validate_pipeline_args",
+    "validate_pipeline_survey_columns",
 ]

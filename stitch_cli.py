@@ -55,6 +55,15 @@ python stitch_cli.py \
     --contextual-geoid-col GEOID10 \
     --file-extension .parquet \
     --parallel
+
+Configuration validation:
+-------------------------
+The run is rejected before anything is read or written if two settings claim the
+same column (``--id-col``/``--date-col``/``--geoid-col``, the three
+``--res-hist-*`` columns, or ``--data-col`` against the contextual date/GEOID
+columns), if the output path would overwrite an input file, or if the survey
+data already contains the columns this run would create — which is what happens
+when a previous output is fed back in. See ``stitch/validation.py``.
 """
 
 import argparse

@@ -502,7 +502,40 @@ directory (as CSV)"** (GUI). This changes the behavior above:
 - The earliest-dated row per person is treated as their residence at survey
   entry; dates earlier than a person's first recorded date resolve to NA.
 
+## Configuration Validation
+
+Every configured column plays exactly one role, and STITCH refuses to start a
+run where one column is asked to play two — the survey's ID / date / GEOID
+columns must be three different columns, as must the residential history's three
+columns and the contextual data's date / GEOID / measure columns. These
+collisions used to fail far from their cause (a date column doubling as the ID
+column comes back out of the loader as epoch nanoseconds; several others produce
+an output file with no linked columns at all), so they are now rejected up front
+with a message naming the fields involved.
+
+Two related guards run at the same point:
+
+- The output file may not be the survey or residential-history input, which
+  would otherwise overwrite it.
+- The survey data may not already contain the columns the run would create —
+  that is what feeding a previous STITCH output back in looks like.
+
+The checks run in `run_pipeline`, so they apply to the CLI, the GUI and direct
+library use alike; the GUI additionally reports them inline on the page that
+configures the offending field. They are also importable
+(`stitch.check_pipeline_args`, `stitch.validate_pipeline_args`) for scripted
+runs.
+
 ## Troubleshooting
+
+### "STITCH configuration is not valid"
+Two settings point at the same column, or the output path would overwrite an
+input. The message names the roles and the column — give each role its own
+column. See [Configuration Validation](#configuration-validation).
+
+### "The survey data already contains ... a previous STITCH run"
+The survey file is the output of an earlier run and already carries the lag
+columns this run would create. Start from the original survey file.
 
 ### "No year information found in filenames"
 Ensure contextual data filenames contain a period token: either a 4-digit year

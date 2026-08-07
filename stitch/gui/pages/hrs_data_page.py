@@ -17,13 +17,23 @@ from PyQt6.QtCore import Qt
 
 from ..widgets.file_picker import FilePicker
 from ..widgets.data_preview_table import DataPreviewTable
-from ..validators import validate_data_file, validate_date_column, load_preview_data
+from ..validators import (
+    load_preview_data,
+    validate_data_file,
+    validate_date_column,
+    validate_survey_column_roles,
+)
+from ...validation import duplicate_column_values
+from .field_error import FieldErrorMixin
 
 
-class HRSDataPage(QWizardPage):
+class HRSDataPage(FieldErrorMixin, QWizardPage):
     """
     Wizard page for selecting survey data file and date column.
     """
+
+    #: Shown in a column dropdown until the user picks a column.
+    COLUMN_PLACEHOLDER = "Select a column..."
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -69,15 +79,25 @@ class HRSDataPage(QWizardPage):
         config_group = QGroupBox("Data Configuration")
         config_layout = QFormLayout()
 
+        # Nothing is pre-selected in these combos: every column is an explicit
+        # choice, so a wrong guess can never be carried into a run unnoticed.
         self.date_column_combo = QComboBox()
+        self.date_column_combo.setPlaceholderText(self.COLUMN_PLACEHOLDER)
         self.date_column_combo.currentTextChanged.connect(self._on_date_column_changed)
         config_layout.addRow("Date Column:", self.date_column_combo)
 
         self.id_col_combo = QComboBox()
+        self.id_col_combo.setPlaceholderText(self.COLUMN_PLACEHOLDER)
         config_layout.addRow("ID Column:", self.id_col_combo)
 
         self.geoid_col_combo = QComboBox()
+        self.geoid_col_combo.setPlaceholderText(self.COLUMN_PLACEHOLDER)
         config_layout.addRow("GEOID Column:", self.geoid_col_combo)
+
+        for combo in self._column_combos():
+            combo.currentTextChanged.connect(
+                lambda _text, c=combo: self._set_field_error(c, False)
+            )
 
         config_note = QLabel(
             "Note: GEOID column will not be used if residential history is provided"
@@ -94,6 +114,13 @@ class HRSDataPage(QWizardPage):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
+        # Validation label (problems that block Next), kept separate from the
+        # file/date status above.
+        self.validation_label = QLabel("")
+        self.validation_label.setWordWrap(True)
+        self.validation_label.setStyleSheet("color: #dc3545;")
+        layout.addWidget(self.validation_label)
+
         layout.addStretch()
         self.setLayout(layout)
 
@@ -102,6 +129,10 @@ class HRSDataPage(QWizardPage):
         self.registerField("date_col*", self.date_column_combo, "currentText")
         self.registerField("id_col*", self.id_col_combo, "currentText")
         self.registerField("geoid_col*", self.geoid_col_combo, "currentText")
+
+    def _column_combos(self):
+        """The three role dropdowns, in the order they appear on the page."""
+        return (self.date_column_combo, self.id_col_combo, self.geoid_col_combo)
 
     def _on_file_selected(self, file_path: str):
         """Handle file selection."""
@@ -137,27 +168,15 @@ class HRSDataPage(QWizardPage):
 
         columns = preview_df.columns.tolist()
 
-        # Populate date column dropdown
-        self.date_column_combo.clear()
-        self.date_column_combo.addItems(columns)
-
-        # Populate id column dropdown
-        self.id_col_combo.clear()
-        self.id_col_combo.addItems(columns)
-        # Try to set default to "hhidpn"
-        hhidpn_index = self.id_col_combo.findText("hhidpn")
-        if hhidpn_index >= 0:
-            self.id_col_combo.setCurrentIndex(hhidpn_index)
-
-        # Populate geoid column dropdown
-        self.geoid_col_combo.clear()
-        self.geoid_col_combo.addItems(columns)
-        # Try to find and set default to a column containing "GEOID" or "GEOID"
-        for possible_geoid in ["GEOID2010", "GEOID", "geoid"]:
-            geoid_index = self.geoid_col_combo.findText(possible_geoid)
-            if geoid_index >= 0:
-                self.geoid_col_combo.setCurrentIndex(geoid_index)
-                break
+        # Offer every column in every role and select none of them: guessing a
+        # role from a column name is how a single column ends up serving two
+        # roles without the user noticing.
+        for combo in self._column_combos():
+            combo.clear()
+            combo.addItems(columns)
+            combo.setCurrentIndex(-1)
+            self._set_field_error(combo, False)
+        self.validation_label.setText("")
 
         self.status_label.setText(
             f"Loaded successfully: {len(preview_df.columns)} columns, "
@@ -200,6 +219,31 @@ class HRSDataPage(QWizardPage):
                 combo.setCurrentIndex(index)
 
         self.completeChanged.emit()
+
+    def validatePage(self):
+        """Reject a configuration where one column is asked to play two roles.
+
+        The loader normalizes the date column and then the ID column, so a
+        column serving as both comes back out as epoch nanoseconds and the run
+        fails deep inside the lag machinery; the GEOID collisions corrupt more
+        quietly still.
+        """
+        date_col = self.date_column_combo.currentText()
+        id_col = self.id_col_combo.currentText()
+        geoid_col = self.geoid_col_combo.currentText()
+
+        is_valid, error_msg = validate_survey_column_roles(date_col, id_col, geoid_col)
+
+        duplicates = duplicate_column_values([date_col, id_col, geoid_col])
+        for combo in self._column_combos():
+            self._set_field_error(combo, combo.currentText() in duplicates)
+
+        if not is_valid:
+            self.validation_label.setText(f"✗ {error_msg}")
+            return False
+
+        self.validation_label.setText("")
+        return True
 
     def isComplete(self):
         """Check if the page is complete."""

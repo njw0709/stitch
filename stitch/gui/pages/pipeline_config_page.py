@@ -24,8 +24,13 @@ from PyQt6.QtWidgets import (
 )
 
 from ..widgets.file_picker import DirectoryPicker
-from ..validators import load_preview_data
+from ..validators import (
+    load_preview_data,
+    validate_generated_column_names,
+    validate_output_path_conflicts,
+)
 from ...temporal import LinkageResolution
+from .field_error import FieldErrorMixin
 
 
 SUPPORTED_EXTENSIONS = [".csv", ".dta", ".parquet", ".pq", ".feather", ".xlsx", ".xls"]
@@ -44,7 +49,7 @@ GREEN_BUTTON_STYLE = """
 """
 
 
-class PipelineConfigPage(QWizardPage):
+class PipelineConfigPage(FieldErrorMixin, QWizardPage):
     """
     Wizard page for pipeline execution settings.
     """
@@ -55,6 +60,11 @@ class PipelineConfigPage(QWizardPage):
         self.setSubTitle("Configure pipeline execution settings and output options.")
 
         self._raw_samples: dict[str, list] = {}
+        # Survey column names, cached from the preview loaded for GEOID
+        # sampling; used to detect names this run would overwrite.
+        self._survey_columns: list[str] = []
+        self._survey_preview_path: Optional[str] = None
+        self._survey_preview_df = None
         # Inferred contextual resolution (set on initializePage); None until known.
         self._contextual_resolution: Optional[LinkageResolution] = None
         # Whether the resolution selector has been seeded once (fresh vs. edit).
@@ -418,10 +428,28 @@ class PipelineConfigPage(QWizardPage):
         normalization matches the pipeline, which receives the same types from read_data.
         """
         df, _ = load_preview_data(file_path, n_rows=100)
+        return self._unique_raw_values(df, col_name, n)
+
+    @staticmethod
+    def _unique_raw_values(df, col_name: str, n: int = 3) -> list:
+        """Up to *n* unique non-null raw values of *col_name* in *df*."""
         if df is None or col_name not in df.columns:
             return []
         raw = df[col_name].dropna().unique()
         return list(raw[:n])
+
+    def _load_survey_preview(self, file_path: str):
+        """Preview of the survey file, cached per path.
+
+        Feeds both the GEOID samples and the column-name check, so selecting
+        the pipeline page never reads the survey file more than once.
+        """
+        if file_path != self._survey_preview_path:
+            df, _ = load_preview_data(file_path, n_rows=100)
+            self._survey_preview_path = file_path
+            self._survey_preview_df = df
+            self._survey_columns = [] if df is None else list(df.columns)
+        return self._survey_preview_df
 
     def _find_first_contextual_file(self) -> Optional[str]:
         """Return the path of the first matching contextual data file."""
@@ -462,10 +490,12 @@ class PipelineConfigPage(QWizardPage):
         # HRS
         hrs_path = wizard.field("hrs_data_path")
         geoid_col = wizard.field("geoid_col")
-        if hrs_path and geoid_col:
-            samples = self._sample_unique_geoids(hrs_path, geoid_col)
-            self._raw_samples["HRS"] = samples
-            lines.append(f"Survey ({geoid_col}): {samples or '(none)'}")
+        if hrs_path:
+            survey_df = self._load_survey_preview(hrs_path)
+            if geoid_col:
+                samples = self._unique_raw_values(survey_df, geoid_col)
+                self._raw_samples["HRS"] = samples
+                lines.append(f"Survey ({geoid_col}): {samples or '(none)'}")
 
         # Residential History
         if wizard.field("use_residential_hist"):
@@ -628,8 +658,6 @@ class PipelineConfigPage(QWizardPage):
         numeric_type = getattr(args, "geoid_numeric_type", "int") or "int"
         self.numeric_type_combo.setCurrentIndex(0 if numeric_type == "int" else 1)
 
-    ERROR_STYLE = "border: 2px solid #dc3545; border-radius: 3px;"
-
     def isComplete(self):
         """Keep the "Add Job" button interactive; validation runs in validatePage."""
         return True
@@ -665,12 +693,62 @@ class PipelineConfigPage(QWizardPage):
             )
             return False
 
+        conflict = self._check_conflicts()
+        if conflict:
+            self.validation_label.setText(f"✗ {conflict}")
+            return False
+
         self.validation_label.setText("")
         return True
 
-    def _set_field_error(self, widget, has_error: bool):
-        """Toggle a red error border on a widget."""
-        widget.setStyleSheet(self.ERROR_STYLE if has_error else "")
+    def _check_conflicts(self) -> str:
+        """Problems that need the other pages' values; "" when there are none.
+
+        Returns the first message found: an output file that would overwrite an
+        input, or a survey file that already carries the columns this run would
+        create (i.e. the output of an earlier run being fed back in).
+        """
+        wizard = self.wizard()
+        if wizard is None:
+            return ""
+
+        save_dir = self.save_dir_picker.get_path()
+        output_name = self.output_name_edit.text().strip()
+        survey_path = wizard.field("hrs_data_path")
+        res_hist_path = (
+            wizard.field("residential_hist_path")
+            if wizard.field("use_residential_hist")
+            else None
+        )
+
+        is_valid, error_msg = validate_output_path_conflicts(
+            save_dir, output_name, survey_path, res_hist_path
+        )
+        if not is_valid:
+            # The offending pair is the output location, so highlight both.
+            self._set_field_error(self.save_dir_picker.path_edit, True)
+            self._set_field_error(self.output_name_edit, True)
+            return error_msg
+
+        # Skipped when the survey preview could not be read: the pipeline
+        # reports the real read error, and blocking here would be worse.
+        if not self._survey_columns:
+            return ""
+
+        data_col = wizard.field("data_col") or ""
+        is_valid, error_msg = validate_generated_column_names(
+            self._survey_columns,
+            date_col=wizard.field("date_col"),
+            geoid_col=wizard.field("geoid_col"),
+            data_cols=[c.strip() for c in data_col.split(",") if c.strip()],
+            start_lag=self.start_lag_spin.value(),
+            end_lag=self.end_lag_spin.value(),
+            linkage_resolution=self._current_resolution(),
+            post_lag_average=self.post_lag_average_checkbox.isChecked(),
+        )
+        # No widget is highlighted: the offending input is the survey file,
+        # which lives on another page.
+        return "" if is_valid else error_msg
 
     def _clear_lag_range_error(self):
         """Clear the lag-range highlight once the range becomes valid again."""

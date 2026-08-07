@@ -9,6 +9,13 @@ import pandas as pd
 
 from ..daily_measure import parse_period_from_filename
 from ..io_utils import read_data, get_file_format
+from ..validation import (
+    check_contextual_column_roles,
+    check_generated_column_collisions,
+    check_output_path_conflicts,
+    check_residential_history_column_roles,
+    check_survey_column_roles,
+)
 
 
 def validate_file_exists(path: str) -> bool:
@@ -95,6 +102,113 @@ def validate_date_column(df: pd.DataFrame, col: str) -> Tuple[bool, str]:
         return True, ""
     except Exception as e:
         return False, f"Column '{col}' cannot be interpreted as dates: {str(e)}"
+
+
+def _as_result(problems: List[str]) -> Tuple[bool, str]:
+    """Adapt a ``stitch.validation`` problem list to this module's contract."""
+    if not problems:
+        return True, ""
+    return False, " ".join(problems)
+
+
+def validate_survey_column_roles(
+    date_col: Optional[str],
+    id_col: Optional[str],
+    geoid_col: Optional[str],
+) -> Tuple[bool, str]:
+    """
+    Validate that the survey's date, ID and GEOID columns are distinct.
+
+    Returns:
+        (is_valid, error_message)
+    """
+    return _as_result(check_survey_column_roles(date_col, id_col, geoid_col))
+
+
+def validate_residential_history_column_roles(
+    id_col: Optional[str],
+    date_col: Optional[str],
+    geoid_col: Optional[str],
+) -> Tuple[bool, str]:
+    """
+    Validate that the residential history's three columns are distinct.
+
+    Returns:
+        (is_valid, error_message)
+    """
+    return _as_result(
+        check_residential_history_column_roles(id_col, date_col, geoid_col)
+    )
+
+
+def validate_contextual_column_roles(
+    date_col: Optional[str],
+    geoid_col: Optional[str],
+    data_cols: Optional[List[str]],
+) -> Tuple[bool, str]:
+    """
+    Validate that the contextual date, GEOID and measure columns are distinct.
+
+    Returns:
+        (is_valid, error_message)
+    """
+    return _as_result(check_contextual_column_roles(date_col, geoid_col, data_cols))
+
+
+def validate_output_path_conflicts(
+    save_dir: str,
+    output_name: str,
+    survey_path: Optional[str] = None,
+    residential_history_path: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """
+    Validate that the output file is not one of the input files.
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not save_dir or not output_name:
+        return True, ""
+    return _as_result(
+        check_output_path_conflicts(
+            Path(save_dir) / Path(output_name), survey_path, residential_history_path
+        )
+    )
+
+
+def validate_generated_column_names(
+    survey_columns: List[str],
+    *,
+    date_col: Optional[str],
+    geoid_col: Optional[str],
+    data_cols: Optional[List[str]],
+    start_lag: int,
+    end_lag: int,
+    linkage_resolution,
+    post_lag_average: bool = False,
+) -> Tuple[bool, str]:
+    """
+    Validate that the survey data does not already carry the columns this
+    configuration would create (i.e. it is not a previous STITCH output).
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not survey_columns or end_lag < start_lag:
+        return True, ""
+    return _as_result(
+        check_generated_column_collisions(
+            survey_columns,
+            date_col=date_col,
+            geoid_col=geoid_col,
+            data_cols=data_cols,
+            lags=range(start_lag, end_lag + 1),
+            resolution=linkage_resolution,
+            post_lag_average=post_lag_average,
+            start_lag=start_lag,
+            max_lag=end_lag,
+        )
+    )
 
 
 def validate_contextual_directory(

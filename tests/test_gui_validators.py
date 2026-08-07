@@ -14,6 +14,11 @@ from stitch.gui.validators import (
     validate_stata_file,
     validate_date_column,
     validate_contextual_directory,
+    validate_contextual_column_roles,
+    validate_generated_column_names,
+    validate_output_path_conflicts,
+    validate_residential_history_column_roles,
+    validate_survey_column_roles,
     check_column_consistency,
     load_preview_data,
 )
@@ -201,3 +206,99 @@ class TestLoadPreviewData:
         preview_df, error_msg = load_preview_data("/nonexistent.csv")
         assert preview_df is None
         assert "error" in error_msg.lower()
+
+
+class TestColumnRoleValidators:
+    """Test the (is_valid, error_message) wrappers around the core checks."""
+
+    def test_survey_roles_valid(self):
+        assert validate_survey_column_roles("iwdate", "hhidpn", "GEOID2010") == (
+            True,
+            "",
+        )
+
+    def test_survey_roles_collision(self):
+        is_valid, error_msg = validate_survey_column_roles(
+            "iwdate", "iwdate", "GEOID2010"
+        )
+        assert is_valid is False
+        assert "iwdate" in error_msg
+
+    def test_residential_history_roles_valid(self):
+        assert validate_residential_history_column_roles(
+            "hhidpn", "move_date", "GEOID"
+        ) == (True, "")
+
+    def test_residential_history_roles_collision(self):
+        is_valid, error_msg = validate_residential_history_column_roles(
+            "hhidpn", "move_date", "move_date"
+        )
+        assert is_valid is False
+        assert "move date column" in error_msg
+
+    def test_contextual_roles_valid(self):
+        assert validate_contextual_column_roles("Date", "GEOID10", ["HeatIndex"]) == (
+            True,
+            "",
+        )
+
+    def test_contextual_roles_collision(self):
+        is_valid, error_msg = validate_contextual_column_roles(
+            "Date", "GEOID10", ["Date"]
+        )
+        assert is_valid is False
+        assert "data column" in error_msg
+
+    def test_output_path_valid(self, tmp_path):
+        survey = tmp_path / "survey.dta"
+        survey.write_text("x")
+        assert validate_output_path_conflicts(
+            str(tmp_path), "linked.dta", str(survey)
+        ) == (True, "")
+
+    def test_output_path_overwrites_survey(self, tmp_path):
+        survey = tmp_path / "survey.dta"
+        survey.write_text("x")
+        is_valid, error_msg = validate_output_path_conflicts(
+            str(tmp_path), "survey.dta", str(survey)
+        )
+        assert is_valid is False
+        assert "survey data file" in error_msg
+
+    def test_output_path_skipped_when_incomplete(self):
+        assert validate_output_path_conflicts("", "", "survey.dta") == (True, "")
+
+    def test_generated_names_valid(self):
+        assert validate_generated_column_names(
+            ["hhidpn", "iwdate", "GEOID2010"],
+            date_col="iwdate",
+            geoid_col="GEOID2010",
+            data_cols=["index"],
+            start_lag=0,
+            end_lag=2,
+            linkage_resolution="daily",
+        ) == (True, "")
+
+    def test_generated_names_collision(self):
+        is_valid, error_msg = validate_generated_column_names(
+            ["hhidpn", "index_iwdate_1day_prior"],
+            date_col="iwdate",
+            geoid_col="GEOID2010",
+            data_cols=["index"],
+            start_lag=0,
+            end_lag=2,
+            linkage_resolution="daily",
+        )
+        assert is_valid is False
+        assert "index_iwdate_1day_prior" in error_msg
+
+    def test_generated_names_skipped_without_columns(self):
+        assert validate_generated_column_names(
+            [],
+            date_col="iwdate",
+            geoid_col="GEOID2010",
+            data_cols=["index"],
+            start_lag=0,
+            end_lag=2,
+            linkage_resolution="daily",
+        ) == (True, "")
